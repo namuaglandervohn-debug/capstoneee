@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
 import { API, HEADERS } from '../lib/api';
+import { AuthProvider } from "./app/context/AuthContext";
 
 export type UserRole = 'hr' | 'employee' | 'supervisor' | 'gm' | 'accounting';
 
