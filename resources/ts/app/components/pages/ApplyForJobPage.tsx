@@ -11,7 +11,7 @@ import { POSITIONS, COMPANY } from '../../lib/constants';
 import FileUploadField from '../FileUploadField';
 import { copyToClipboard } from '../../lib/copyToClipboard';
 import { saveApplicationFiles } from '../../lib/localDb';
-
+import { supabase } from "../../lib/supabaseClient";
 const CIVIL_STATUS = ['Single', 'Married', 'Widowed', 'Separated', 'Annulled'];
 const GENDER = ['Male', 'Female', 'Prefer not to say'];
 const SUFFIXES = ['', 'Jr.', 'Sr.', 'II', 'III', 'IV'];
@@ -101,81 +101,71 @@ export default function ApplyForJobPage() {
       setFormData(prev => ({ ...prev, [key]: maskGovId(e.target.value, segs) }));
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.firstName || !formData.lastName || !formData.position || !formData.email) {
-      setError('Please fill in all required fields: First Name, Last Name, Email, and Position.');
-      return;
+  e.preventDefault();
+
+  if (!formData.firstName || !formData.lastName || !formData.position || !formData.email) {
+    setError('Please fill in all required fields: First Name, Last Name, Email, and Position.');
+    return;
+  }
+
+  setSubmitting(true);
+  setError('');
+
+  try {
+    const applicantIdGenerated = `APP-2026-${Date.now()}`;
+
+    const resumeFileData = resumeFiles[0]
+      ? await fileToBase64(resumeFiles[0])
+      : null;
+
+    const supportingDocumentFiles = await Promise.all(
+      supportingFiles.map(async (f) => ({
+        name: f.name,
+        type: f.type,
+        data: await fileToBase64(f),
+      }))
+    );
+
+    const { data: applicantData, error } = await supabase
+      .from("applicants")
+      .insert({
+        applicant_id: applicantIdGenerated,
+        first_name: formData.firstName,
+        middle_name: formData.middleName,
+        last_name: formData.lastName,
+        email: formData.email,
+        phone_number: formData.contactNumber,
+        address: formData.address,
+        position_applied: formData.position,
+        gender: formData.gender,
+        civil_status: formData.civilStatus,
+        educational_attainment: formData.education,
+        experience: formData.experience,
+        status: "Submitted",
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw error;
     }
-    setSubmitting(true);
-    setError('');
-    try {
-      const fullName = [formData.firstName, formData.middleName, formData.lastName, formData.suffix]
-        .filter(Boolean).join(' ');
 
-      const resumeFileData = resumeFiles[0] ? await fileToBase64(resumeFiles[0]) : null;
-      const supportingDocumentFiles = await Promise.all(
-        supportingFiles.map(async f => ({
-          name: f.name,
-          type: f.type,
-          data: await fileToBase64(f),
-        }))
-      );
+    saveApplicationFiles(applicantIdGenerated, {
+      resumeFileName: resumeFiles[0]?.name ?? null,
+      resumeFileData,
+      supportingDocuments: supportingFiles.map((f) => f.name),
+      supportingDocumentFiles,
+    });
 
-      const res = await fetch(`${API}/applications`, {
-        method: 'POST',
-        headers: HEADERS,
-        body: JSON.stringify({
-          name: fullName,
-          firstName: formData.firstName,
-          middleName: formData.middleName,
-          lastName: formData.lastName,
-          suffix: formData.suffix,
-          gender: formData.gender,
-          civilStatus: formData.civilStatus,
-          birthdate: formData.birthdate,
-          birthplace: formData.birthplace,
-          height: formData.height,
-          weight: formData.weight,
-          position: formData.position,
-          email: formData.email,
-          phone: formData.contactNumber,
-          address: formData.address,
-          education: formData.education,
-          experience: formData.experience,
-          tin: formData.tin,
-          sss: formData.sss,
-          philhealth: formData.philhealth,
-          pagibig: formData.pagibig,
-          emergencyContact: formData.emergencyContactName
-            ? `${formData.emergencyContactName} (${formData.emergencyContactRelation}) — ${formData.emergencyContactPhone}`
-            : '',
-          resumeFileName: resumeFiles[0]?.name ?? null,
-          resumeFileData,
-          supportingDocuments: supportingFiles.map(f => f.name),
-          supportingDocumentFiles,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Submission failed');
+    setApplicantId(applicantIdGenerated);
+    setSuccessDialog(true);
 
-      // Always persist file data directly in the client-side store.
-      // This guarantees files appear in the HR view regardless of whether
-      // the server saved them (large base64 payloads can exceed KV limits).
-      saveApplicationFiles(data.application.id, {
-        resumeFileName: resumeFiles[0]?.name ?? null,
-        resumeFileData,
-        supportingDocuments: supportingFiles.map(f => f.name),
-        supportingDocumentFiles,
-      });
-
-      setApplicantId(data.application.id);
-      setSuccessDialog(true);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  } catch (err: any) {
+    setError(err.message);
+  } finally {
+    setSubmitting(false);
+  }
+};
 
   const handleCopyId = async () => {
     setCopyFailed(false);

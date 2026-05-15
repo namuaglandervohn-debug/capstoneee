@@ -172,9 +172,16 @@ app.delete("/make-server-24f1182d/employees/:id", async (c) => {
 // ── APPLICATIONS (RECRUITMENT) ───────────────────────────────────────────────
 app.get("/make-server-24f1182d/applications", async (c) => {
   try {
-    const records = await kv.getByPrefix("application:");
-    const applications = records.filter((a: any) => a != null && typeof a.name === "string");
-    return c.json({ applications });
+    const { data, error } = await supabase
+      .from("applicants")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      return c.json({ error: error.message }, 500);
+    }
+
+    return c.json({ applications: data ?? [] });
   } catch (error) {
     console.log("Error fetching applications:", error);
     return c.json({ error: `Failed to fetch applications: ${error}` }, 500);
@@ -249,7 +256,14 @@ app.put("/make-server-24f1182d/applications/:id", async (c) => {
     const existing: any = await kv.get(`application:${id}`);
     if (!existing) return c.json({ error: "Application not found" }, 404);
     const updated = { ...existing, ...body, updatedAt: new Date().toISOString() };
-    await kv.set(`application:${id}`, updated);
+    const { error } = await supabase
+  .from("applicants")
+  .update(updated)
+  .eq("applicant_id", id);
+
+if (error) {
+  return c.json({ error: error.message }, 500);
+}
     return c.json({ application: updated });
   } catch (error) {
     console.log("Error updating application:", error);
