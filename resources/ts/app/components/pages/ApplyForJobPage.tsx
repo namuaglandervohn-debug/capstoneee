@@ -139,7 +139,7 @@ export default function ApplyForJobPage() {
         position_applied: formData.position,
         gender: formData.gender,
         civil_status: formData.civilStatus,
-        educational_attainment: formData.education,
+        educational: formData.education,
         experience: formData.experience,
         status: "Submitted",
       })
