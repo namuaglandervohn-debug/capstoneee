@@ -187,6 +187,21 @@ const applicantIdGenerated = `APP-2026-${nextNumber}`;
       supportingDocumentFiles,
     });
 
+    await supabase.from("notifications").insert([
+  {
+    recipient_role: "hr",
+    title: "New Application Submitted",
+    message: `${formData.firstName} ${formData.lastName} submitted a new application for ${formData.position}.`,
+    type: "application",
+  },
+  {
+    recipient_role: "gm",
+    title: "New Application Submitted",
+    message: `${formData.firstName} ${formData.lastName} submitted a new application for ${formData.position}.`,
+    type: "application",
+  },
+]);
+
     setApplicantId(applicantIdGenerated);
     setSuccessDialog(true);
 

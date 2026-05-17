@@ -106,19 +106,24 @@ export default function ScheduleManagement() {
 
   // ── Push a schedule notification to an employee (fire-and-forget) ──────
   const pushNotification = async (
-    recipientEmployee: string,
-    type: 'schedule_published' | 'schedule_edited',
-    message: string,
-    scheduleId: string,
-    week: string,
-  ) => {
-    try {
-      await fetch(`${API}/notifications`, {
-        method: 'POST', headers: HEADERS,
-        body: JSON.stringify({ recipientEmployee, type, message, scheduleId, week, createdBy: user?.name }),
+  recipientEmployeeId: string,
+  title: string,
+  message: string,
+  type: string,
+) => {
+  try {
+    await supabase
+      .from("notifications")
+      .insert({
+        recipient_employee_id: recipientEmployeeId,
+        title,
+        message,
+        type,
       });
-    } catch { /* silent — notification failure must not block main action */ }
-  };
+  } catch (error) {
+    console.error("Notification error:", error);
+  }
+};
 
   // ── Data fetchers ────────────────────────────────────────────────────────
   const fetchSchedules = async () => {
@@ -302,6 +307,13 @@ const scheduleId =
 
     if (error) throw error;
 
+    await pushNotification(
+      s.employeeId,
+      "New Schedule Published",
+      `Your schedule for ${s.week} has been published.`,
+      "schedule"
+    );
+
     setSchedules(prev =>
       prev.map(x =>
         x.id === s.id ? { ...x, status: "Published" } : x
@@ -462,6 +474,13 @@ const scheduleId =
       .eq("schedule_id", editRecord.id);
 
     if (error) throw error;
+
+    await pushNotification(
+    editRecord.employeeId,
+    "Schedule Updated",
+    `Your schedule for ${editForm.week} has been updated.`,
+    "schedule"
+  );
 
     setEditDialog(false);
     await fetchSchedules();

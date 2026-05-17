@@ -11,7 +11,7 @@ import {
   NotificationsNone, ManageAccounts, Timer, ReceiptLong, AccountCircle, BadgeOutlined,
 } from '@mui/icons-material';
 import { useState, useEffect } from 'react';
-import { API, HEADERS } from '../../lib/api';
+import { supabase } from '../../lib/supabaseClient';
 
 const drawerWidth = 268;
 
@@ -48,94 +48,45 @@ export default function RootLayout() {
 
   // Fetch notifications based on role — must be before any early return
   useEffect(() => {
-    if (!user) return;
-    const fetchNotifications = async () => {
-      try {
-        const notifs: any[] = [];
+  if (!user) return;
 
-        // HR/Admin: new applications
-        if (user.role === 'hr') {
-          const res = await fetch(`${API}/applications`, { headers: HEADERS });
-          const data = await res.json();
-          const newApps = (data.applications ?? []).filter((a: any) => a?.status === 'Submitted' || a?.status === 'Under Review');
-          newApps.forEach((app: any) => {
-            notifs.push({
-              id: `app-${app.id}`,
-              type: 'application',
-              title: 'New Application',
-              message: `${app.name} applied for ${app.position}`,
-              link: '/dashboard/recruitment',
-              timestamp: app.dateApplied,
-            });
-          });
-        }
+  const fetchNotifications = async () => {
+    try {
+      let query = supabase
+        .from("notifications")
+        .select("*")
+        .eq("is_read", false)
+        .order("created_at", { ascending: false });
 
-        // Supervisor: pending requests
-        if (user.role === 'supervisor') {
-          const res = await fetch(`${API}/requests`, { headers: HEADERS });
-          const data = await res.json();
-          const pendingReqs = (data.requests ?? []).filter((r: any) => r?.status === 'Pending');
-          pendingReqs.forEach((req: any) => {
-            notifs.push({
-              id: `req-${req.id}`,
-              type: 'request',
-              title: 'Pending Request',
-              message: `${req.employee} - ${req.type} on ${req.date}`,
-              link: '/dashboard/requests',
-              timestamp: req.submittedDate,
-            });
-          });
-        }
-
-        // Employee: schedule notifications (published / edited)
-        if (user.role === 'employee' && user.name) {
-          try {
-            const res = await fetch(`${API}/notifications?recipient=${encodeURIComponent(user.name)}`, { headers: HEADERS });
-            const data = await res.json();
-            const schedNotifs = (data.notifications ?? []).filter((n: any) => n != null && !n.read);
-            schedNotifs.forEach((n: any) => {
-              notifs.push({
-                id: n.id,
-                type: 'schedule',
-                title: n.type === 'schedule_published' ? '📅 Schedule Published' : '✏️ Schedule Updated',
-                message: n.message,
-                link: '/dashboard/schedule',
-                timestamp: n.createdAt,
-              });
-            });
-          } catch { /* non-critical */ }
-        }
-
-        // GM: new evaluation submissions from supervisors
-        if (user.role === 'gm') {
-          try {
-            const res = await fetch(`${API}/notifications?recipient=gm`, { headers: HEADERS });
-            const data = await res.json();
-            const evalNotifs = (data.notifications ?? []).filter((n: any) => n != null && !n.read);
-            evalNotifs.forEach((n: any) => {
-              notifs.push({
-                id: n.id,
-                type: 'evaluation',
-                title: '📊 New Evaluation Submitted',
-                message: n.message,
-                link: '/dashboard/evaluation',
-                timestamp: n.createdAt,
-              });
-            });
-          } catch { /* non-critical */ }
-        }
-
-        setNotifications(notifs);
-        setNotifCount(notifs.length);
-      } catch (e) {
-        console.error('Failed to fetch notifications:', e);
+      // Employee notifications
+      if (user.role === "employee") {
+        query = query.eq("recipient_employee_id", user.employeeId);
       }
-    };
 
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
-  }, [user?.role]);
+      // HR notifications
+      else if (user.role === "hr") {
+        query = query.eq("recipient_role", "hr");
+      }
+
+      // GM notifications
+      else if (user.role === "gm") {
+        query = query.eq("recipient_role", "gm");
+      }
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+
+      setNotifications(data ?? []);
+      setNotifCount(data?.length ?? 0);
+
+    } catch (error) {
+      console.error("Notification fetch error:", error);
+    }
+  };
+
+  fetchNotifications();
+}, [user]);
 
   // Early return AFTER all hooks
   if (!user) return <Navigate to="/" replace />;
@@ -147,14 +98,27 @@ export default function RootLayout() {
 
   const unreadCount = notifications.filter(n => !readIds.has(n.id)).length;
 
-  const handleMarkRead = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setReadIds(prev => new Set([...prev, id]));
-  };
+  const handleMarkRead = async (id: string, e: React.MouseEvent) => {
+  e.stopPropagation();
 
-  const handleMarkAllRead = () => {
-    setReadIds(new Set(notifications.map(n => n.id)));
-  };
+  await supabase
+    .from("notifications")
+    .update({ is_read: true })
+    .eq("id", id);
+
+  setNotifications(prev => prev.filter(n => n.id !== id));
+};
+
+  const handleMarkAllRead = async () => {
+  const ids = notifications.map(n => n.id);
+
+  await supabase
+    .from("notifications")
+    .update({ is_read: true })
+    .in("id", ids);
+
+  setNotifications([]);
+};
 
   const ROLE_LABELS: Record<string, string> = {
     hr: 'HR / Admin', employee: 'Employee', supervisor: 'Supervisor',
@@ -292,8 +256,8 @@ export default function RootLayout() {
                     <Box
                       key={notif.id}
                       onClick={() => {
-                        navigate(notif.link);
-                        setNotifAnchor(null);
+                        if (notif.type === "application") navigate("/dashboard/recruitment");
+                        if (notif.type === "schedule") navigate("/dashboard/schedule");
                       }}
                       sx={{
                         p: 2,
@@ -314,9 +278,9 @@ export default function RootLayout() {
                           <Typography variant="body2" color="text.primary" sx={{ mt: 0.5 }}>
                             {notif.message}
                           </Typography>
-                          {notif.timestamp && (
+                          {notif.created_at && (
                             <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                              {notif.timestamp}
+                              {new Date(notif.created_at).toLocaleString()}
                             </Typography>
                           )}
                         </Box>
