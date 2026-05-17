@@ -18,6 +18,7 @@ import UserManagement from "./components/pages/UserManagement";
 import EmployeeTimeTracker from "./components/pages/EmployeeTimeTracker";
 import EmployeePayslips from "./components/pages/EmployeePayslips";
 import MyProfile from "./components/pages/MyProfile";
+import EmployeeDTR from "./components/pages/EmployeeDTR";
 
 export const router = createBrowserRouter([
   {
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "evaluation", element: <PerformanceEvaluation /> },
       // Employee
       { path: "time", element: <EmployeeTimeTracker /> },
+      { path: "dtr", element: <EmployeeDTR /> },
       { path: "payslips", element: <EmployeePayslips /> },
       { path: "profile", element: <MyProfile /> },
     ],

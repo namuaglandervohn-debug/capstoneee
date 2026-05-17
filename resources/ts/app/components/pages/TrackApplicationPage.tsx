@@ -6,8 +6,7 @@ import {
 } from '@mui/material';
 import { ArrowBackIosNew, ManageSearch, AccountCircle, BusinessCenter, Event, InfoOutlined, Sell, LocationOn, Schedule, Person, Notes } from '@mui/icons-material';
 import AuthBackground from '../AuthBackground';
-import { API, HEADERS } from '../../lib/api';
-
+import { supabase } from '../../lib/supabaseClient';
 interface ApplicationStatus {
   id: string; name: string; position: string; email: string; phone: string;
   status: 'Submitted' | 'Under Review' | 'Missing Requirements' | 'For Interview' | 'Hired' | 'Not Qualified';
@@ -35,6 +34,20 @@ const STATUS_MESSAGES: Record<string, string> = {
   'Not Qualified': 'Thank you for your interest. Unfortunately, you do not meet the requirements for this position.',
 };
 
+const formatTime = (time?: string) => {
+  if (!time) return "—";
+
+  const [hourStr, minute] = time.split(":");
+
+  let hour = parseInt(hourStr);
+
+  const ampm = hour >= 12 ? "PM" : "AM";
+
+  hour = hour % 12;
+  hour = hour ? hour : 12;
+
+  return `${hour}:${minute} ${ampm}`;
+};
 export default function TrackApplicationPage() {
   const navigate = useNavigate();
   const [applicantId, setApplicantId] = useState('');
@@ -43,21 +56,48 @@ export default function TrackApplicationPage() {
   const [loading, setLoading] = useState(false);
 
   const handleTrack = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(''); setApplicationData(null); setLoading(true);
-    try {
-      const id = applicantId.trim().toUpperCase();
-      const res = await fetch(`${API}/applications/${id}`, { headers: HEADERS });
-      const data = await res.json();
-      if (res.status === 404) { setError('Applicant ID not found. Please check your ID and try again.'); return; }
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setApplicationData({ ...data.application, name: data.application.name, id: data.application.id });
-    } catch (e: any) {
-      setError(`Could not retrieve application: ${e.message}`);
-    } finally {
-      setLoading(false);
+  e.preventDefault();
+  setError('');
+  setApplicationData(null);
+  setLoading(true);
+
+  try {
+    const id = applicantId.trim().toUpperCase();
+
+    const { data, error } = await supabase
+      .from("applicants")
+      .select("*")
+      .eq("applicant_id", id)
+      .single();
+
+    if (error || !data) {
+      setError("Applicant ID not found. Please check your ID and try again.");
+      return;
     }
-  };
+
+    setApplicationData({
+      id: data.applicant_id,
+      name: `${data.first_name ?? ""} ${data.middle_name ?? ""} ${data.last_name ?? ""}`.replace(/\s+/g, " ").trim(),
+      position: data.position_applied ?? "",
+      email: data.email ?? "",
+      phone: data.phone_number ?? "",
+      status: data.status ?? "Submitted",
+      dateApplied: data.created_at
+        ? new Date(data.created_at).toLocaleDateString()
+        : "",
+      interviewDate: data.interview_date ?? "",
+      interviewTime: data.interview_time ?? "",
+      interviewLocation: data.interview_location ?? "",
+      interviewNotes: data.interview_notes ?? "",
+      scheduledBy: data.scheduled_by ?? "",
+      notes: data.notes ?? "",
+    });
+  } catch (e: any) {
+    setError(`Could not retrieve application: ${e.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <AuthBackground>
@@ -192,7 +232,7 @@ export default function TrackApplicationPage() {
                                 <Schedule sx={{ color: 'info.main', mt: 0.25 }} fontSize="small" />
                                 <Box>
                                   <Typography variant="caption" color="text.secondary" display="block">Interview Time</Typography>
-                                  <Typography variant="body1" fontWeight={600}>{applicationData.interviewTime}</Typography>
+                                  <Typography variant="body1" fontWeight={600}>{formatTime(applicationData.interviewTime)}</Typography>
                                 </Box>
                               </Box>
                             </Grid>

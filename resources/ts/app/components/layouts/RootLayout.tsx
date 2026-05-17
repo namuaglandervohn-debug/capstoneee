@@ -8,7 +8,7 @@ import {
 import {
   SpaceDashboard, PersonAddAlt1, Groups, CalendarMonth, Schedule, Assignment,
   Payments, Insights, Analytics, Logout, Menu as MenuIcon, CorporateFare,
-  NotificationsNone, ManageAccounts, Timer, ReceiptLong, AccountCircle,
+  NotificationsNone, ManageAccounts, Timer, ReceiptLong, AccountCircle, BadgeOutlined,
 } from '@mui/icons-material';
 import { useState, useEffect } from 'react';
 import { API, HEADERS } from '../../lib/api';
@@ -23,6 +23,7 @@ const ALL_MENU_ITEMS = [
   { text: 'Employees',         icon: <Groups />,             path: '/dashboard/employees',        roles: ['hr','supervisor','gm'] },
   { text: 'Schedule',          icon: <CalendarMonth />,      path: '/dashboard/schedule',         roles: ['hr','supervisor','employee'] },
   { text: 'Time Tracker',      icon: <Timer />,              path: '/dashboard/time',             roles: ['employee'] },
+  { text: 'My DTR', icon: <BadgeOutlined />, path: '/dashboard/dtr', roles: ['employee'] },
   { text: 'Attendance',        icon: <Schedule />,           path: '/dashboard/attendance',       roles: ['hr','supervisor'] },
   { text: 'Requests',          icon: <Assignment />,         path: '/dashboard/requests',         roles: ['hr','supervisor','employee'] },
   { text: 'Payroll',           icon: <Payments />,           path: '/dashboard/payroll',          roles: ['hr','accounting'] },

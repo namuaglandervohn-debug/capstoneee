@@ -1,7 +1,7 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
-import { API, HEADERS } from '../lib/api';
+import { createContext, useContext, useState, ReactNode } from "react";
+import { supabase } from "../lib/supabaseClient";
 
-export type UserRole = 'hr' | 'employee' | 'supervisor' | 'gm' | 'accounting';
+export type UserRole = "hr" | "employee" | "supervisor" | "gm" | "accounting";
 
 export interface AuthUser {
   id: string;
@@ -14,98 +14,97 @@ export interface AuthUser {
 
 interface AuthContextType {
   user: AuthUser | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, role?: UserRole) => Promise<void>;
   logout: () => void;
   changePassword: (userId: string, newPassword: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Built-in system accounts (cannot be deleted, always available)
 const SYSTEM_ACCOUNTS: Record<string, { user: AuthUser; password: string }> = {
-  'admin': {
-    user: { id: 'SYS-HR', name: 'HR Admin', email: 'admin', role: 'hr' },
-    password: 'admin123',
+  admin: {
+    user: { id: "SYS-HR", name: "HR Admin", email: "admin", role: "hr" },
+    password: "admin123",
   },
-  'hr@company.com': {
-    user: { id: 'SYS-HR', name: 'HR Admin', email: 'hr@company.com', role: 'hr' },
-    password: 'password',
+  "hr@company.com": {
+    user: { id: "SYS-HR", name: "HR Admin", email: "hr@company.com", role: "hr" },
+    password: "password",
   },
-  'employee@company.com': {
-    user: { id: 'SYS-EMP', name: 'Juan Dela Cruz', email: 'employee@company.com', role: 'employee' },
-    password: 'password',
+  "employee@company.com": {
+    user: { id: "SYS-EMP", name: "Juan Dela Cruz", email: "employee@company.com", role: "employee" },
+    password: "password",
   },
-  'supervisor@company.com': {
-    user: { id: 'SYS-SUP', name: 'Maria Santos', email: 'supervisor@company.com', role: 'supervisor' },
-    password: 'password',
+  "supervisor@company.com": {
+    user: { id: "SYS-SUP", name: "Maria Santos", email: "supervisor@company.com", role: "supervisor" },
+    password: "password",
   },
-  'gm@company.com': {
-    user: { id: 'SYS-GM', name: 'General Manager', email: 'gm@company.com', role: 'gm' },
-    password: 'password',
+  "gm@company.com": {
+    user: { id: "SYS-GM", name: "General Manager", email: "gm@company.com", role: "gm" },
+    password: "password",
   },
-  'accounting@company.com': {
-    user: { id: 'SYS-ACC', name: 'Accounting Staff', email: 'accounting@company.com', role: 'accounting' },
-    password: 'password',
+  "accounting@company.com": {
+    user: { id: "SYS-ACC", name: "Accounting Staff", email: "accounting@company.com", role: "accounting" },
+    password: "password",
   },
 };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
 
-  const login = async (email: string, password: string) => {
-    // 1. Check system (built-in) accounts
-    const systemMatch = SYSTEM_ACCOUNTS[email.trim().toLowerCase()] || SYSTEM_ACCOUNTS[email.trim()];
-    if (systemMatch && password === systemMatch.password) {
-      setUser(systemMatch.user);
-      return;
+  const login = async (email: string, password: string, role?: UserRole) => {
+  const loginEmail = email.trim().toLowerCase();
+
+  const systemMatch = SYSTEM_ACCOUNTS[loginEmail] || SYSTEM_ACCOUNTS[email.trim()];
+  if (systemMatch && password === systemMatch.password) {
+    if (role && systemMatch.user.role !== role) {
+      throw new Error("Selected role does not match this account.");
     }
 
-    // 2. Check KV-stored user accounts (created by HR)
-    try {
-      const res = await fetch(`${API}/users`, { headers: HEADERS });
-      if (res.ok) {
-        const data = await res.json();
-        const users: any[] = data.users ?? [];
-        const found = users.find(
-          (u: any) =>
-            (u.email?.toLowerCase() === email.trim().toLowerCase() ||
-             u.username?.toLowerCase() === email.trim().toLowerCase()) &&
-            u.password === password &&
-            u.active !== false
-        );
-        if (found) {
-          setUser({
-            id: found.id,
-            name: found.name,
-            email: found.email,
-            role: found.role as UserRole,
-            employeeId: found.employeeId ?? null,
-            outlet: found.outlet ?? null,
-          });
-          return;
-        }
-      }
-    } catch (_) {
-      // If KV lookup fails, fall through to throw below
-    }
+    setUser(systemMatch.user);
+    return;
+  }
 
-    throw new Error('Invalid credentials');
-  };
+  let query = supabase
+    .from("user_accounts")
+    .select("*")
+    .eq("email", loginEmail)
+    .eq("password", password)
+    .eq("is_active", true);
+
+  if (role) {
+    query = query.eq("role", role);
+  }
+
+  const { data: account, error } = await query.maybeSingle();
+
+  if (error) throw error;
+
+  if (account) {
+    setUser({
+      id: account.user_id,
+      name: account.full_name,
+      email: account.email,
+      role: account.role as UserRole,
+      employeeId: account.employee_id ?? null,
+      outlet: account.outlet ?? null,
+    });
+    return;
+  }
+
+  throw new Error("Invalid credentials or selected role does not match.");
+};
 
   const logout = () => {
     setUser(null);
   };
 
   const changePassword = async (userId: string, newPassword: string) => {
-    const res = await fetch(`${API}/users/${userId}`, {
-      method: 'PUT',
-      headers: HEADERS,
-      body: JSON.stringify({ password: newPassword }),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      throw new Error(data.error ?? 'Failed to change password');
-    }
+    const { error } = await supabase
+      .from("user_accounts")
+      .update({ password: newPassword })
+      .eq("user_id", userId);
+
+    if (error) throw error;
   };
 
   return (
@@ -117,6 +116,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider');
+  if (!context) throw new Error("useAuth must be used within AuthProvider");
   return context;
 }

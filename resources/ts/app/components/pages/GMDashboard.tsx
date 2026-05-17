@@ -9,7 +9,7 @@ import {
   EmojiEvents, Timelapse, TrendingUp,
 } from '@mui/icons-material';
 import { useAuth } from '../../context/AuthContext';
-import { API, HEADERS } from '../../lib/api';
+import { supabase } from '../../lib/supabaseClient';
 
 export default function GMDashboard() {
   const { user } = useAuth();
@@ -20,24 +20,44 @@ export default function GMDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const [statsRes, appRes, evalRes] = await Promise.all([
-          fetch(`${API}/dashboard/stats`, { headers: HEADERS }),
-          fetch(`${API}/applications`, { headers: HEADERS }),
-          fetch(`${API}/evaluations`, { headers: HEADERS }),
-        ]);
-        const [statsData, appData, evalData] = await Promise.all([
-          statsRes.json(), appRes.json(), evalRes.json(),
-        ]);
-        setStats(statsData);
-        setForInterview((appData.applications ?? []).filter((a: any) => a?.status === 'For Interview').slice(0, 5));
-        const evals = (evalData.evaluations ?? []).filter((e: any) => e?.status === 'Pending GM Approval');
-        setTopEvaluations(evals.sort((a: any, b: any) => b.finalScore - a.finalScore).slice(0, 5));
-      } catch (e) { console.error('GM dashboard error:', e); }
-      finally { setLoading(false); }
-    })();
-  }, []);
+  (async () => {
+    try {
+      const { data: applicantsData, error: applicantsError } = await supabase
+        .from("applicants")
+        .select("*")
+        .eq("status", "For Interview")
+        .order("interview_date", { ascending: true })
+        .limit(5);
+
+      if (applicantsError) throw applicantsError;
+
+      const mappedApplicants = (applicantsData ?? []).map((app: any) => ({
+        id: app.applicant_id,
+        name: `${app.first_name ?? ""} ${app.middle_name ?? ""} ${app.last_name ?? ""}`
+          .replace(/\s+/g, " ")
+          .trim(),
+        position: app.position_applied ?? "",
+        interviewDate: app.interview_date ?? "",
+        interviewTime: app.interview_time ?? "",
+        status: app.status ?? "",
+      }));
+
+      setForInterview(mappedApplicants);
+
+      setStats({
+        forInterviewCount: mappedApplicants.length,
+        activeEmployees: 0,
+        pendingRequests: 0,
+      });
+
+      setTopEvaluations([]);
+    } catch (e) {
+      console.error("GM dashboard error:", e);
+    } finally {
+      setLoading(false);
+    }
+  })();
+}, []);
 
   const statCards = [
     { title: 'Active Employees',      value: loading ? '…' : String(stats?.activeEmployees ?? 0),   icon: <PeopleAlt />,     color: '#1F7A47' },
@@ -148,7 +168,7 @@ export default function GMDashboard() {
           <Box key={a.id} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
             <Box>
               <Typography variant="body2" fontWeight={600}>{a.name}</Typography>
-              <Typography variant="caption" color="text.secondary">{a.position} · {a.interviewDate ?? 'Date TBD'}</Typography>
+              <Typography variant="caption" color="text.secondary">{a.position} · {a.interviewDate || 'Date TBD'} {a.interviewTime || ''}</Typography>
             </Box>
             <Chip label="For Interview" size="small" color="info" />
           </Box>

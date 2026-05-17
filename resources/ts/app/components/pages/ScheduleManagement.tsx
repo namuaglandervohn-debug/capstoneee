@@ -12,12 +12,12 @@ import {
 } from '@mui/icons-material';
 import { CalendarMonth } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
-import { API, HEADERS } from '../../lib/api';
+import { supabase } from "../../lib/supabaseClient";
 import { OUTLETS, POSITIONS } from '../../lib/constants';
 import { useAuth } from '../../context/AuthContext';
 
 interface Schedule {
-  id: string; employee: string; position: string; outlet: string; week: string;
+  id: string; employeeId: string; employee: string; position: string; outlet: string; week: string;
   timeIn: string; timeOut: string; breakTime: string;
   monday: string; tuesday: string; wednesday: string; thursday: string;
   friday: string; saturday: string; sunday: string;
@@ -30,9 +30,21 @@ const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const EMPTY = {
-  employee: '', position: '', outlet: '', week: '', timeIn: '', timeOut: '',
-  breakTime: '1 hour', monday: '', tuesday: '', wednesday: '', thursday: '',
-  friday: '', saturday: '', sunday: '',
+  employeeId: '',
+  employee: '',
+  position: '',
+  outlet: '',
+  week: '',
+  timeIn: '',
+  timeOut: '',
+  breakTime: '1 hour',
+  monday: '',
+  tuesday: '',
+  wednesday: '',
+  thursday: '',
+  friday: '',
+  saturday: '',
+  sunday: '',
 };
 
 const SHIFT_PRESETS = [
@@ -80,7 +92,12 @@ export default function ScheduleManagement() {
   const [editForm, setEditForm] = useState(EMPTY);
 
   // Employee list with position + outlet for auto-fill
-  const [employeeList, setEmployeeList] = useState<{ name: string; position: string; outlet: string }[]>([]);
+  const [employeeList, setEmployeeList] = useState<{
+  employeeId: string;
+  name: string;
+  position: string;
+  outlet: string;
+}[]>([]);
   const excelRef = useRef<HTMLInputElement>(null);
   const [importingExcel, setImportingExcel] = useState(false);
 
@@ -105,94 +122,306 @@ export default function ScheduleManagement() {
 
   // ── Data fetchers ────────────────────────────────────────────────────────
   const fetchSchedules = async () => {
-    setLoading(true); setError(null);
-    try {
-      const res = await fetch(`${API}/schedules`, { headers: HEADERS });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setSchedules((data.schedules ?? []).filter((s: any) => s != null));
-    } catch (e: any) {
-      setError(`Could not load schedules: ${e.message}`);
-    } finally { setLoading(false); }
-  };
+  setLoading(true);
+  setError(null);
+
+  try {
+    const { data: scheduleData, error: scheduleError } = await supabase
+      .from("schedule")
+      .select("*");
+
+    if (scheduleError) throw scheduleError;
+
+    const { data: employeeData, error: employeeError } = await supabase
+      .from("employees")
+      .select("employee_id, first_name, middle_name, last_name, suffix");
+
+    if (employeeError) throw employeeError;
+
+    const employeeMap = new Map(
+      (employeeData ?? []).map((e: any) => [
+        e.employee_id,
+        `${e.first_name ?? ""} ${e.middle_name ?? ""} ${e.last_name ?? ""} ${e.suffix ?? ""}`
+          .replace(/\s+/g, " ")
+          .trim(),
+      ])
+    );
+
+    const visibleSchedules =
+    user?.role === "employee"
+    ? (scheduleData ?? []).filter((s: any) => s.employee_id === user.employeeId)
+    : (scheduleData ?? []);
+
+    const mappedSchedules: Schedule[] = visibleSchedules.map((s: any) => ({
+      id: s.schedule_id ?? "—",
+      employeeId: s.employee_id ?? "",
+      employee: employeeMap.get(s.employee_id) ?? "—",
+      position: s.position ?? "",
+      outlet: s.outlet ?? "",
+      week: s.week ?? "",
+      timeIn: s.time_in ?? "",
+      timeOut: s.time_out ?? "",
+      breakTime: s.break_time ?? "",
+      monday: s.monday ?? "",
+      tuesday: s.tuesday ?? "",
+      wednesday: s.wednesday ?? "",
+      thursday: s.thursday ?? "",
+      friday: s.friday ?? "",
+      saturday: s.saturday ?? "",
+      sunday: s.sunday ?? "",
+      status: s.status ?? "Draft",
+      confirmedBy: s.confirmed_by ?? "",
+      confirmedAt: s.confirmed_at ?? "",
+      declinedBy: s.declined_by ?? "",
+      declinedAt: s.declined_at ?? "",
+    }));
+
+    setSchedules(mappedSchedules);
+  } catch (e: any) {
+    setError(`Could not load schedules: ${e.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => { fetchSchedules(); }, []);
 
-  const handleCreate = async () => {
-    if (!form.employee || !form.week) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`${API}/schedules`, { method: 'POST', headers: HEADERS, body: JSON.stringify(form) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setSchedules(prev => [...prev, data.record]);
-      setOpenDialog(false); setForm(EMPTY);
-      setSnackbar({ open: true, message: 'Schedule saved as Draft!', severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    } finally { setSaving(false); }
+   // Fetch employee list — includes position AND outlet for auto-fill
+  useEffect(() => {
+  const fetchEmployees = async () => {
+    const { data, error } = await supabase
+      .from("employees")
+      .select("employee_id, first_name, middle_name, last_name, position, outlet, status")
+      .neq("status", "Resigned")
+      .order("first_name", { ascending: true });
+
+    if (error) {
+      console.error("Failed to fetch employees:", error);
+      return;
+    }
+
+    const list = (data ?? []).map((e: any) => ({
+      employeeId: e.employee_id,
+      name: `${e.first_name ?? ""} ${e.middle_name ?? ""} ${e.last_name ?? ""}`
+        .replace(/\s+/g, " ")
+        .trim(),
+      position: e.position ?? "",
+      outlet: e.outlet ?? "",
+    }));
+
+    setEmployeeList(list);
   };
+
+  fetchEmployees();
+}, []);
+
+  const handleSaveDraft = async () => {
+  try {
+    setSaving(true);
+
+    const year = new Date().getFullYear();
+
+const { data: existingSchedules, error: scheduleIdError } = await supabase
+  .from("schedule")
+  .select("schedule_id")
+  .like("schedule_id", `SCH-${year}-%`);
+
+if (scheduleIdError) throw scheduleIdError;
+
+const numbers = (existingSchedules ?? [])
+  .map((s: any) => {
+    const match = String(s.schedule_id).match(/SCH-\d{4}-(\d+)$/);
+    return match ? Number(match[1]) : 0;
+  })
+  .filter((n) => n > 0);
+
+const nextNumber =
+  numbers.length > 0
+    ? Math.max(...numbers) + 1
+    : 1;
+
+const scheduleId =
+  `SCH-${year}-${String(nextNumber).padStart(4, "0")}`;
+
+    const payload = {
+  schedule_id: scheduleId,
+
+  employee_id: form.employeeId ?? "",
+  position: form.position ?? "",
+  outlet: form.outlet ?? "",
+  week: form.week ?? "",
+
+  time_in: form.timeIn || null,
+  time_out: form.timeOut || null,
+  break_time: form.breakTime ?? "",
+
+  monday: form.monday ?? "",
+  tuesday: form.tuesday ?? "",
+  wednesday: form.wednesday ?? "",
+  thursday: form.thursday ?? "",
+  friday: form.friday ?? "",
+  saturday: form.saturday ?? "",
+  sunday: form.sunday ?? "",
+
+  status: "Draft",
+};
+
+    const { error } = await supabase
+      .from("schedule")
+      .insert(payload);
+
+    if (error) throw error;
+
+    setSnackbar({
+      open: true,
+      message: "✅ Schedule saved as draft!",
+      severity: "success",
+    });
+
+    setOpenDialog(false);
+
+    fetchSchedules();
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   // Publish: only callable when status === 'Draft'; after success button hides until next edit
   const handlePublish = async (s: Schedule) => {
-    try {
-      const res = await fetch(`${API}/schedules/${s.id}`, {
-        method: 'PUT', headers: HEADERS, body: JSON.stringify({ status: 'Published' }),
-      });
-      if (!res.ok) throw new Error('Update failed');
-      setSchedules(prev => prev.map(x => x.id === s.id ? { ...x, status: 'Published' } : x));
-      setSnackbar({ open: true, message: '✅ Schedule published — employee can now view and confirm.', severity: 'success' });
-      await pushNotification(
-        s.employee,
-        'schedule_published',
-        `Your schedule for ${s.week} has been published by ${user?.name ?? 'HR'}. Please review and confirm it.`,
-        s.id, s.week,
-      );
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    }
-  };
+  try {
+    const { error } = await supabase
+      .from("schedule")
+      .update({ status: "Published" })
+      .eq("schedule_id", s.id);
+
+    if (error) throw error;
+
+    setSchedules(prev =>
+      prev.map(x =>
+        x.id === s.id ? { ...x, status: "Published" } : x
+      )
+    );
+
+    setSnackbar({
+      open: true,
+      message: "✅ Schedule published — employee can now view and confirm.",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const handleConfirm = async (id: string) => {
-    try {
-      const res = await fetch(`${API}/schedules/${id}`, {
-        method: 'PUT', headers: HEADERS,
-        body: JSON.stringify({ status: 'Confirmed', confirmedBy: user?.name, confirmedAt: new Date().toISOString() }),
-      });
-      if (!res.ok) throw new Error('Update failed');
-      setSchedules(prev => prev.map(s => s.id === id ? { ...s, status: 'Confirmed', confirmedBy: user?.name } : s));
-      setSnackbar({ open: true, message: '✅ Schedule confirmed! Your schedule has been acknowledged.', severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    }
-  };
+  try {
+    const confirmedAt = new Date().toISOString();
+
+    const { error } = await supabase
+      .from("schedule")
+      .update({
+        status: "Confirmed",
+        confirmed_by: user?.name ?? "",
+        confirmed_at: confirmedAt,
+      })
+      .eq("schedule_id", id);
+
+    if (error) throw error;
+
+    setSchedules(prev =>
+      prev.map(s =>
+        s.id === id
+          ? { ...s, status: "Confirmed", confirmedBy: user?.name, confirmedAt }
+          : s
+      )
+    );
+
+    setSnackbar({
+      open: true,
+      message: "✅ Schedule confirmed! Your schedule has been acknowledged.",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const handleDecline = async (id: string) => {
-    try {
-      const res = await fetch(`${API}/schedules/${id}`, {
-        method: 'PUT', headers: HEADERS,
-        body: JSON.stringify({ status: 'Declined', declinedBy: user?.name, declinedAt: new Date().toISOString() }),
-      });
-      if (!res.ok) throw new Error('Update failed');
-      setSchedules(prev => prev.map(s => s.id === id ? { ...s, status: 'Declined' as any, declinedBy: user?.name } : s));
-      setSnackbar({ open: true, message: '❌ Schedule declined. HR/Supervisor has been notified.', severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    }
-  };
+  try {
+    const declinedAt = new Date().toISOString();
+
+    const { error } = await supabase
+      .from("schedule")
+      .update({
+        status: "Declined",
+        declined_by: user?.name ?? "",
+        declined_at: declinedAt,
+      })
+      .eq("schedule_id", id);
+
+    if (error) throw error;
+
+    setSchedules(prev =>
+      prev.map(s =>
+        s.id === id
+          ? { ...s, status: "Declined", declinedBy: user?.name, declinedAt }
+          : s
+      )
+    );
+
+    setSnackbar({
+      open: true,
+      message: "❌ Schedule declined.",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm(`Delete schedule ${id}? This cannot be undone.`)) return;
-    try {
-      const res = await fetch(`${API}/schedules/${id}`, { method: 'DELETE', headers: HEADERS });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setSchedules(prev => prev.filter(s => s.id !== id));
-      setSnackbar({ open: true, message: `🗑️ Schedule ${id} deleted.`, severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    }
-  };
+  if (!window.confirm(`Delete schedule ${id}? This cannot be undone.`)) return;
+
+  try {
+    const { error } = await supabase
+      .from("schedule")
+      .delete()
+      .eq("schedule_id", id);
+
+    if (error) throw error;
+
+    setSchedules(prev => prev.filter(s => s.id !== id));
+
+    setSnackbar({
+      open: true,
+      message: `🗑️ Schedule ${id} deleted.`,
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const openEditDialog = (s: Schedule) => {
     setEditRecord(s);
@@ -207,54 +436,63 @@ export default function ScheduleManagement() {
 
   // Edit: resets status to 'Draft' → Publish button reappears; notifies employee
   const handleEditSave = async () => {
-    if (!editRecord) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`${API}/schedules/${editRecord.id}`, {
-        method: 'PUT', headers: HEADERS,
-        body: JSON.stringify({ ...editForm, status: 'Draft' }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setSchedules(prev => prev.map(s => s.id === editRecord.id ? data.record : s));
-      setEditDialog(false);
-      setSnackbar({ open: true, message: `✅ Schedule ${editRecord.id} updated — status reset to Draft.`, severity: 'success' });
-      await pushNotification(
-        editRecord.employee,
-        'schedule_edited',
-        `Your schedule for ${editForm.week || editRecord.week} has been updated by ${user?.name ?? 'HR'}. Please review and re-confirm once it is re-published.`,
-        editRecord.id, editForm.week || editRecord.week,
-      );
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    } finally { setSaving(false); }
-  };
+  if (!editRecord) return;
+
+  setSaving(true);
+
+  try {
+    const { error } = await supabase
+      .from("schedule")
+      .update({
+        position: editForm.position ?? "",
+        outlet: editForm.outlet ?? "",
+        week: editForm.week ?? "",
+        time_in: editForm.timeIn || null,
+        time_out: editForm.timeOut || null,
+        break_time: editForm.breakTime ?? "",
+        monday: editForm.monday ?? "",
+        tuesday: editForm.tuesday ?? "",
+        wednesday: editForm.wednesday ?? "",
+        thursday: editForm.thursday ?? "",
+        friday: editForm.friday ?? "",
+        saturday: editForm.saturday ?? "",
+        sunday: editForm.sunday ?? "",
+        status: "Draft",
+      })
+      .eq("schedule_id", editRecord.id);
+
+    if (error) throw error;
+
+    setEditDialog(false);
+    await fetchSchedules();
+
+    setSnackbar({
+      open: true,
+      message: `Schedule ${editRecord.id} updated`,
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   const filtered = schedules.filter(s => {
-    if (canConfirm) {
-      const matchesOwner = s.employee === user?.name || s.employee === user?.email;
-      if (!matchesOwner) return false;
-    }
-    return filterOutlet === 'all' || s.outlet === filterOutlet;
-  });
+  if (user?.role === "employee") {
+    if (s.employeeId !== user.employeeId) return false;
 
-  // Fetch employee list — includes position AND outlet for auto-fill
-  useEffect(() => {
-    fetch(`${API}/employees`, { headers: HEADERS })
-      .then(r => r.json())
-      .then(d => {
-        const list = (d.employees ?? [])
-          .filter((e: any) => e?.name && e?.status !== 'Resigned')
-          .map((e: any) => ({
-            name: e.name as string,
-            position: (e.position ?? '') as string,
-            outlet: (e.outlet ?? '') as string,
-          }))
-          .sort((a: any, b: any) => a.name.localeCompare(b.name));
-        setEmployeeList(list);
-      })
-      .catch(() => {});
-  }, []);
+    if (!["Published", "Confirmed", "Declined"].includes(s.status)) {
+      return false;
+    }
+  }
+
+  return filterOutlet === "all" || s.outlet === filterOutlet;
+});
 
   const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -314,14 +552,11 @@ export default function ScheduleManagement() {
           <Typography variant="h4" gutterBottom fontWeight="bold" sx={{ fontSize: { xs: '1.35rem', sm: '1.75rem', md: '2.125rem' } }}>
             Employee Schedule Management
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Create weekly schedules per outlet — Supervisors publish, Employees confirm
-          </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
           <Tooltip title="Refresh"><span><IconButton onClick={fetchSchedules} disabled={loading}><Sync /></IconButton></span></Tooltip>
           {canPublish && (
-            <Button variant="contained" startIcon={<AddCircleOutline />} onClick={() => setOpenDialog(true)} sx={{ flexShrink: 0 }}>
+            <Button variant="contained" startIcon={<AddCircleOutline />} onClick={() => { setForm(EMPTY); setOpenDialog(true);}} sx={{ flexShrink: 0 }}>
               Create Schedule
             </Button>
           )}
@@ -372,6 +607,7 @@ export default function ScheduleManagement() {
                 <TableCell>Position</TableCell>
                 <TableCell>Outlet</TableCell>
                 <TableCell>Week</TableCell>
+                <TableCell>Break Time</TableCell>
                 {DAY_LABELS.map(d => <TableCell key={d}>{d}</TableCell>)}
                 <TableCell>Status</TableCell>
                 <TableCell>Actions</TableCell>
@@ -396,6 +632,7 @@ export default function ScheduleManagement() {
                     } variant="outlined" sx={{ fontSize: '0.72rem' }} />
                   </TableCell>
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>{s.week}</TableCell>
+                  <TableCell>{s.breakTime || "—"}</TableCell>
                   {DAYS.map(d => (
                     <TableCell key={d} sx={{ fontSize: '0.78rem', color: s[d as keyof Schedule] === 'Off' ? 'text.disabled' : 'inherit' }}>
                       {(s[d as keyof Schedule] as string) || '—'}
@@ -501,20 +738,29 @@ export default function ScheduleManagement() {
           <Grid container spacing={2} sx={{ mt: 1 }}>
             {/* Employee — position AND outlet auto-fill on select */}
             <Grid size={{ xs: 12, md: 4 }}>
-              <TextField fullWidth select label="Employee" required value={form.employee}
-                onChange={e => {
-                  const selected = employeeList.find(emp => emp.name === e.target.value);
-                  setForm(prev => ({
-                    ...prev,
-                    employee: e.target.value,
-                    position: selected?.position ?? prev.position,
-                    outlet: selected?.outlet || prev.outlet,   // ← auto-fill outlet
-                  }));
+              <TextField fullWidth select label="Select Employee" value={form.employeeId || ""} required onChange={(e) => {
+              const selected = employeeList.find(emp => emp.employeeId === e.target.value);
+
+              setForm(prev => ({
+                ...prev,
+                employeeId: selected?.employeeId ?? "",
+                employee: selected?.name ?? "",
+                position: selected?.position ?? "",
+                outlet: selected?.outlet ?? "",
+              }));
                 }}
-                InputLabelProps={{ shrink: true }}>
-                <MenuItem key="emp-empty" value="">Select employee…</MenuItem>
-                {employeeList.map(emp => <MenuItem key={emp.name} value={emp.name}>{emp.name}</MenuItem>)}
-              </TextField>
+                InputLabelProps={{ shrink: true }}
+              >
+                <MenuItem key="emp-empty" value="">
+                  Select employee…
+                </MenuItem>
+
+                {employeeList.map(emp => (
+                  <MenuItem key={emp.employeeId} value={emp.employeeId}>
+                    {emp.name}
+                  </MenuItem>
+                ))}
+</TextField>
             </Grid>
             <Grid size={{ xs: 12, md: 4 }}>
               <TextField fullWidth select label="Position" value={form.position}
@@ -577,7 +823,7 @@ export default function ScheduleManagement() {
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={saving}
+          <Button variant="contained" onClick={handleSaveDraft} disabled={saving}
             startIcon={saving ? <CircularProgress size={16} color="inherit" /> : undefined}>
             {saving ? 'Saving…' : 'Save as Draft'}
           </Button>

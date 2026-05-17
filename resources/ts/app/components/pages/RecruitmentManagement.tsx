@@ -1,4 +1,4 @@
-import { API, HEADERS } from '../../lib/api';
+import { supabase } from '../../lib/supabaseClient';
 import { loadApplicationFiles } from '../../lib/localDb';
 import { POSITIONS } from '../../lib/constants';
 import { useState, useEffect } from 'react';
@@ -58,6 +58,39 @@ const STATUS_COLORS: Record<string, any> = {
   'For Interview': 'info', 'Hired': 'success', 'Not Qualified': 'error',
 };
 
+const formatDateTime = (dateString?: string) => {
+  if (!dateString) return "—";
+
+  const date = new Date(dateString);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+
+  const ampm = hours >= 12 ? "PM" : "AM";
+
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+
+  return `${year}-${month}-${day} ${String(hours).padStart(2, "0")}:${minutes} ${ampm}`;
+};
+
+const formatInterviewDateTime = (
+  date?: string,
+  time?: string
+) => {
+  if (!date) return "—";
+
+  const combined = time
+    ? `${date}T${time}`
+    : date;
+
+  return formatDateTime(combined);
+};
+
 export default function RecruitmentManagement() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -86,109 +119,378 @@ export default function RecruitmentManagement() {
   const [editReqDialog, setEditReqDialog] = useState(false);
   const [newReqText, setNewReqText] = useState('');
 
+  const isRequirementsLocked =
+  selectedApp?.status === "Hired" ||
+  selectedApp?.status === "For Interview";
+  const isInterviewScheduled =
+  !!selectedApp?.interviewDate;
   const isHR = user?.role === 'hr';
   const isGM = user?.role === 'gm';
 
   const fetchApplications = async () => {
-    setLoading(true); setError(null);
-    try {
-      const res = await fetch(`${API}/applications`, { headers: HEADERS });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setApplications(data.applications ?? []);
-    } catch (e: any) { setError(`Could not load applications: ${e.message}`); }
-    finally { setLoading(false); }
-  };
+  setLoading(true);
+  setError(null);
+
+  try {
+    const { data, error } = await supabase
+      .from("applicants")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    const mappedApplications = (data ?? []).map((app: any) => ({
+      id: app.applicant_id,
+      name: `${app.first_name ?? ""} ${app.middle_name ?? ""} ${app.last_name ?? ""} ${app.suffix ?? ""}`
+      .replace(/\s+/g, " ")
+      .trim(),
+      position: app.position_applied ?? "",
+      dateApplied: app.created_at ?? "",
+      status: app.status ?? "Submitted",
+
+      firstName: app.first_name ?? "",
+      middleName: app.middle_name ?? "",
+      lastName: app.last_name ?? "",
+      suffix: app.suffix ?? "",
+
+      gender: app.gender ?? "",
+      civilStatus: app.civil_status ?? "",
+      birthdate: app.birthdate ?? "",
+      birthplace: app.birthplace ?? "",
+      height: app.height ?? "",
+      weight: app.weight ?? "",
+
+      email: app.email ?? "",
+      phone: app.phone_number ?? "",
+      address: app.address ?? "",
+
+      experience: app.experience ?? "",
+      education: app.education ?? "",
+      coverLetter: app.cover_letter ?? "",
+
+      tin: app.tin ?? "",
+      sss: app.sss ?? "",
+      philhealth: app.philhealth ?? "",
+      pagibig: app.pagibig ?? "",
+
+      emergencyContact: app.emergency_contact ?? "",
+
+      interviewDate: app.interview_date ?? "",
+      interviewTime: app.interview_time ?? "",
+      interviewLocation: app.interview_location ?? "",
+      interviewNotes: app.interview_notes ?? "",
+      interviewFeedback: app.interview_feedback ?? "",
+      hiringDecision: app.hiring_decision ?? "",
+      scheduledBy: app.scheduled_by ?? "",
+      hasResume: app.has_resume ?? false,
+      hasBirthCert: app.has_birth_cert ?? false,
+      hasTOR: app.has_tor ?? false,
+      hasMedCert: app.has_med_cert ?? false,
+      requirementsNote: app.requirements_note ?? "",
+      customRequirements: app.custom_requirements ?? [],
+    }));
+
+    setApplications(mappedApplications);
+  } catch (e: any) {
+    setError(`Could not load applications: ${e.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => { fetchApplications(); }, []);
 
-  const updateApp = async (id: string, update: object, msg: string) => {
-    setSaving(true);
-    try {
-      const res = await fetch(`${API}/applications/${id}`, { method: 'PUT', headers: HEADERS, body: JSON.stringify(update) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setApplications(prev => prev.map(a => a.id === id ? data.application : a));
-      if (selectedApp?.id === id) setSelectedApp(data.application);
-      setSnackbar({ open: true, message: msg, severity: 'success' });
-    } catch (e: any) { setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' }); }
-    finally { setSaving(false); }
-  };
+  const updateApp = async (id: string, update: Partial<Application>, msg: string) => {
+  setSaving(true);
+
+  try {
+    const { error } = await supabase
+      .from("applicants")
+      .update(update)
+      .eq("applicant_id", id);
+
+    if (error) throw error;
+
+    setApplications(prev =>
+      prev.map(a =>
+        a.id === id ? { ...a, ...update } : a
+      )
+    );
+
+    if (selectedApp?.id === id) {
+      setSelectedApp(prev =>
+        prev ? { ...prev, ...update } : prev
+      );
+    }
+
+    setSnackbar({
+      open: true,
+      message: msg,
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   const handleUpdateStatus = (id: string, status: string) => updateApp(id, { status }, `Status updated to "${status}"!`);
-  const handleSaveRequirements = (id: string) => updateApp(id, { ...reqForm, status: (!reqForm.hasResume || !reqForm.hasBirthCert) ? 'Missing Requirements' : 'Under Review' },
-    '✅ Requirements checklist saved!');
-  const handleScheduleInterview = async () => {
-    if (!selectedApp) return;
-    await updateApp(selectedApp.id, { ...iForm, status: 'For Interview', scheduledBy: user?.name }, '✅ Interview scheduled! Status set to "For Interview".');
-    setInterviewDialog(false);
-  };
-  const handleHiringDecision = (id: string, decision: string) => {
-    const status = decision === 'Hired' ? 'Hired' : 'Not Qualified';
-    updateApp(id, { ...gmForm, hiringDecision: decision, status }, `✅ Hiring decision: ${status}`);
+  const handleSaveRequirements = async (id: string) => {
+  const newStatus =
+    !reqForm.hasResume || !reqForm.hasBirthCert
+      ? "Missing Requirements"
+      : "Under Review";
 
-    // ── Auto-create Employee Record + User Account when Hired ────────────────
-    if (decision === 'Hired') {
+  setSaving(true);
+
+  try {
+    const { error } = await supabase
+      .from("applicants")
+      .update({
+        has_resume: reqForm.hasResume,
+        has_birth_cert: reqForm.hasBirthCert,
+        has_tor: reqForm.hasTOR,
+        has_med_cert: reqForm.hasMedCert,
+        requirements_note: reqForm.requirementsNote,
+        custom_requirements: reqForm.customRequirements,
+        status: newStatus,
+      })
+      .eq("applicant_id", id);
+
+    if (error) throw error;
+
+    const localUpdate = {
+      hasResume: reqForm.hasResume,
+      hasBirthCert: reqForm.hasBirthCert,
+      hasTOR: reqForm.hasTOR,
+      hasMedCert: reqForm.hasMedCert,
+      requirementsNote: reqForm.requirementsNote,
+      customRequirements: reqForm.customRequirements,
+      status: newStatus as Application["status"],
+    };
+
+    setApplications(prev =>
+      prev.map(app => app.id === id ? { ...app, ...localUpdate } : app)
+    );
+
+    if (selectedApp?.id === id) {
+      setSelectedApp(prev => prev ? { ...prev, ...localUpdate } : prev);
+    }
+
+    setSnackbar({
+      open: true,
+      message: "✅ Requirements checklist saved!",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
+  const handleScheduleInterview = async () => {
+  if (!selectedApp) return;
+
+  setSaving(true);
+
+  try {
+    const { error } = await supabase
+      .from("applicants")
+      .update({
+        status: "For Interview",
+        interview_date: iForm.interviewDate || null,
+        interview_time: iForm.interviewTime || null,
+        interview_location: iForm.interviewLocation || null,
+        interview_notes: iForm.interviewNotes || null,
+        scheduled_by: user?.name ?? "",
+      })
+      .eq("applicant_id", selectedApp.id);
+
+    if (error) throw error;
+
+    const localUpdate = {
+      status: "For Interview" as Application["status"],
+      interviewDate: iForm.interviewDate,
+      interviewTime: iForm.interviewTime,
+      interviewLocation: iForm.interviewLocation,
+      interviewNotes: iForm.interviewNotes,
+      scheduledBy: user?.name ?? "",
+    };
+
+    setApplications(prev =>
+      prev.map(app =>
+        app.id === selectedApp.id ? { ...app, ...localUpdate } : app
+      )
+    );
+
+    setSelectedApp(prev =>
+      prev ? { ...prev, ...localUpdate } : prev
+    );
+
+    setSnackbar({
+      open: true,
+      message: '✅ Interview scheduled! Status set to "For Interview".',
+      severity: "success",
+    });
+
+    setInterviewDialog(false);
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
+  const handleHiringDecision = async (id: string, decision: string) => {
+  const status = decision === "Hired" ? "Hired" : "Not Qualified";
+
+  try {
+    await updateApp(
+      id,
+      {
+        interview_feedback: gmForm.interviewFeedback,
+        hiring_decision: decision,
+        status,
+      } as any,
+      `✅ Hiring decision: ${status}`
+    );
+
+    if (decision === "Hired") {
       const app = applications.find(a => a.id === id);
+
       if (app) {
-        const fullName = [app.firstName, app.middleName, app.lastName, app.suffix].filter(Boolean).join(' ') || app.name;
-        const employeePayload = {
-          name: fullName,
-          position: app.position ?? '',
-          department: '',
-          outlet: '',
-          email: app.email ?? '',
-          phone: app.phone ?? '',
-          address: app.address ?? '',
-          hireDate: new Date().toISOString().split('T')[0],
-          status: 'Active',
-          salary: '',
-          emergencyContact: app.emergencyContact ?? '',
-          sss: app.sss ?? '',
-          philhealth: app.philhealth ?? '',
-          pagibig: app.pagibig ?? '',
-          tin: app.tin ?? '',
-        };
-        // Create employee record (non-blocking)
-        fetch(`${API}/employees`, { method: 'POST', headers: HEADERS, body: JSON.stringify(employeePayload) })
-          .then(res => res.json())
-          .then(data => {
-            if (data.employee) {
-              // Auto-create user login account
-              const autoEmail = app.email?.trim() || `${fullName.toLowerCase().replace(/\s+/g, '.')}@buenaventura.com`;
-              return fetch(`${API}/users`, {
-                method: 'POST', headers: HEADERS,
-                body: JSON.stringify({
-                  name: fullName,
-                  email: autoEmail,
-                  role: 'employee',
-                  employeeId: data.employee.id,
-                  outlet: '',
-                  password: 'password',
-                }),
-              });
-            }
-          })
-          .catch(err => console.warn('Auto employee/user creation skipped:', err));
+        const firstName = app.firstName ?? "";
+        const middleName = app.middleName ?? "";
+        const lastName = app.lastName ?? "";
+        const suffix = app.suffix ?? "";
+
+        const fullName =
+          [firstName, middleName, lastName, app.suffix]
+            .filter(Boolean)
+            .join(" ") || app.name;
+
+        const loginName = `${firstName}${lastName}`
+          .replace(/\s+/g, "")
+          .toLowerCase();
+
+        const { count: employeeCount } = await supabase
+          .from("employees")
+          .select("*", { count: "exact", head: true });
+
+        const employeeId = `EMP-2026-${String((employeeCount ?? 0) + 1).padStart(4, "0")}`;
+
+        const { count: userCount } = await supabase
+          .from("user_accounts")
+          .select("*", { count: "exact", head: true });
+
+        const userId = `USR-2026-${String((userCount ?? 0) + 1).padStart(4, "0")}`;
+
+        const { error: employeeError } = await supabase
+          .from("employees")
+          .upsert(
+            {
+              employee_id: employeeId,
+              applicant_id: app.id,
+              first_name: firstName,
+              middle_name: middleName,
+              last_name: lastName,
+              suffix: suffix,
+              email: app.email ?? "",
+              phone_number: app.phone ?? "",
+              address: app.address ?? "",
+              gender: app.gender ?? "",
+              civil_status: app.civilStatus ?? "",
+              birthdate: app.birthdate || null,
+              birthplace: app.birthplace ?? "",
+              position: app.position ?? "",
+              outlet: "",
+              status: "Active",
+              hire_date: new Date().toISOString().split("T")[0],
+              education: app.education ?? "",
+              experience: app.experience ?? "",
+              tin: app.tin ?? "",
+              sss: app.sss ?? "",
+              philhealth: app.philhealth ?? "",
+              pagibig: app.pagibig ?? "",
+              emergency_contact: app.emergencyContact ?? "",
+            },
+            { onConflict: "applicant_id" }
+          );
+
+        if (employeeError) throw employeeError;
+
+        const { error: userError } = await supabase
+          .from("user_accounts")
+          .upsert(
+            {
+              user_id: userId,
+              employee_id: employeeId,
+              first_name: firstName,
+              middle_name: middleName,
+              last_name: lastName,
+              full_name: fullName,
+              suffix: suffix,
+              email: `${loginName}@hris.com`,
+              password: `${loginName}123`,
+              role: "employee",
+              outlet: "",
+              is_active: true,
+            },
+            { onConflict: "user_id" }
+          );
+
+        if (userError) throw userError;
       }
     }
-    // ────────────────────────────────────────────────────────────────────────
 
     setViewDialog(false);
-  };
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm(`Delete application ${id}? This action cannot be undone.`)) return;
-    try {
-      const res = await fetch(`${API}/applications/${id}`, { method: 'DELETE', headers: HEADERS });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setApplications(prev => prev.filter(a => a.id !== id));
-      setSnackbar({ open: true, message: `🗑️ Application ${id} deleted.`, severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed to delete: ${e.message}`, severity: 'error' });
-    }
-  };
+  if (!window.confirm(`Delete application ${id}? This cannot be undone.`)) return;
+
+  try {
+    const { error } = await supabase
+      .from("applicants")
+      .delete()
+      .eq("applicant_id", id);
+
+    if (error) throw error;
+
+    setApplications(prev => prev.filter(app => app.id !== id));
+
+    setSnackbar({
+      open: true,
+      message: "Application deleted successfully.",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed to delete: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const openView = async (app: Application) => {
     // Show dialog immediately with list metadata so it feels instant
@@ -248,13 +550,14 @@ export default function RecruitmentManagement() {
 
   // Tab data
   const tabData = [
-    { label: 'All', data: applications },
-    { label: 'Submitted', data: applications.filter(a => a.status === 'Submitted') },
-    { label: 'Under Review', data: applications.filter(a => a.status === 'Under Review') },
-    { label: 'Missing Requirements', data: applications.filter(a => a.status === 'Missing Requirements') },
-    { label: 'For Interview', data: applications.filter(a => a.status === 'For Interview') },
-    { label: 'Hired', data: applications.filter(a => a.status === 'Hired') },
-  ];
+  { label: 'All', data: applications },
+  { label: 'Submitted', data: applications.filter(a => a.status === 'Submitted') },
+  { label: 'Under Review', data: applications.filter(a => a.status === 'Under Review') },
+  { label: 'Missing Requirements', data: applications.filter(a => a.status === 'Missing Requirements') },
+  { label: 'For Interview', data: applications.filter(a => a.status === 'For Interview') },
+  { label: 'Hired', data: applications.filter(a => a.status === 'Hired') },
+  { label: 'Not Qualified', data: applications.filter(a => a.status === 'Not Qualified') },
+];
   const displayData = tabData[tab]?.data ?? applications;
 
   return (
@@ -315,8 +618,8 @@ export default function RecruitmentManagement() {
                   <TableCell><Chip label={app.id} size="small" variant="outlined" /></TableCell>
                   <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{app.name}</TableCell>
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>{app.position}</TableCell>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>{app.dateApplied}</TableCell>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>{app.interviewDate ? `${app.interviewDate} ${app.interviewTime ?? ''}` : '—'}</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDateTime(app.dateApplied)}</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatInterviewDateTime(app.interviewDate, app.interviewTime)}</TableCell>
                   <TableCell><Chip label={app.status} color={STATUS_COLORS[app.status]} size="small" sx={{ whiteSpace: 'nowrap' }} /></TableCell>
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>
                     {/* All actions use consistent Chip style */}
@@ -423,7 +726,7 @@ export default function RecruitmentManagement() {
                 <TextField fullWidth label="Position Applied For" value={selectedApp.position ?? '—'} disabled size="small" />
               </Grid>
               <Grid size={{ xs: 12, sm: 4 }}>
-                <TextField fullWidth label="Date Applied" value={selectedApp.dateApplied ?? '—'} disabled size="small" />
+                <TextField fullWidth label="Date Applied" value={formatDateTime(selectedApp.dateApplied)} disabled size="small" />
               </Grid>
               <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField
@@ -565,11 +868,11 @@ export default function RecruitmentManagement() {
                         REQUIREMENTS CHECKLIST
                       </Typography>
                       <Button
-                        size="small"
                         variant="outlined"
                         startIcon={<EditNote />}
-                        onClick={() => { setNewReqText(''); setEditReqDialog(true); }}
-                        sx={{ ml: 1, fontSize: '0.72rem' }}
+                        onClick={() => setEditReqDialog(true)}
+                        size="small"
+                        disabled={isInterviewScheduled}
                       >
                         Edit
                       </Button>
@@ -578,7 +881,17 @@ export default function RecruitmentManagement() {
                   <Grid size={12}>
                     <FormGroup row>
                       {[['hasResume', 'Resume / CV'], ['hasBirthCert', 'Birth Certificate'], ['hasTOR', 'Transcript of Records (TOR)'], ['hasMedCert', 'Medical Certificate']].map(([key, label]) => (
-                        <FormControlLabel key={key} control={<Checkbox checked={reqForm[key as keyof typeof reqForm] as boolean} onChange={e => setReqForm({ ...reqForm, [key]: e.target.checked })} />} label={label} />
+                        <FormControlLabel
+                              key={key}
+                              control={
+                                <Checkbox
+                                  checked={reqForm[key as keyof typeof reqForm] as boolean}
+                                  disabled={isInterviewScheduled}
+                                  onChange={e => setReqForm({ ...reqForm, [key]: e.target.checked })}
+                                />
+                              }
+                              label={label}
+                            />
                       ))}
                       {/* Custom requirements */}
                       {(reqForm.customRequirements ?? []).map((cr, idx) => (
@@ -587,6 +900,7 @@ export default function RecruitmentManagement() {
                           control={
                             <Checkbox
                               checked={cr.checked}
+                              disabled={isInterviewScheduled}
                               onChange={e => {
                                 const updated = reqForm.customRequirements!.map((r, i) => i === idx ? { ...r, checked: e.target.checked } : r);
                                 setReqForm({ ...reqForm, customRequirements: updated });
@@ -597,8 +911,23 @@ export default function RecruitmentManagement() {
                         />
                       ))}
                     </FormGroup>
-                    <TextField fullWidth multiline rows={2} label="Requirements Note" value={reqForm.requirementsNote} onChange={e => setReqForm({ ...reqForm, requirementsNote: e.target.value })} sx={{ mt: 1 }} size="small" />
-                    <Button variant="outlined" sx={{ mt: 1 }} onClick={() => handleSaveRequirements(selectedApp.id)} disabled={saving}>
+                    <TextField
+                        fullWidth
+                        multiline
+                        rows={2}
+                        label="Requirements Note"
+                        value={reqForm.requirementsNote}
+                        disabled={isInterviewScheduled}
+                        onChange={e => setReqForm({ ...reqForm, requirementsNote: e.target.value })}
+                        sx={{ mt: 1 }}
+                        size="small"
+                      />
+                    <Button
+                          variant="outlined"
+                          sx={{ mt: 1 }}
+                          onClick={() => handleSaveRequirements(selectedApp.id)}
+                          disabled={saving || isInterviewScheduled}
+                        >
                       {saving ? 'Saving…' : 'Save Requirements Checklist'}
                     </Button>
                   </Grid>
@@ -609,7 +938,7 @@ export default function RecruitmentManagement() {
               {selectedApp.interviewDate && (
                 <>
                   <Grid size={12}><Divider /><Typography variant="subtitle2" color="text.secondary" fontWeight={700} sx={{ mt: 1, letterSpacing: 0.5 }}>INTERVIEW DETAILS</Typography></Grid>
-                  {[['Interview Date', selectedApp.interviewDate], ['Interview Time', selectedApp.interviewTime ?? '—'], ['Location', selectedApp.interviewLocation ?? '—'], ['Notes', selectedApp.interviewNotes ?? '—'], ['Scheduled By', selectedApp.scheduledBy ?? '—']].map(([k, v]) => (
+                  {[['Interview Schedule', formatInterviewDateTime(selectedApp.interviewDate, selectedApp.interviewTime)], ['Location', selectedApp.interviewLocation ?? '—'], ['Notes', selectedApp.interviewNotes ?? '—'], ['Scheduled By', selectedApp.scheduledBy ?? '—']].map(([k, v]) => (
                     <Grid key={k} size={{ xs: 12, md: 6 }}><TextField fullWidth label={k} value={v} disabled size="small" /></Grid>
                   ))}
                 </>
@@ -645,6 +974,7 @@ export default function RecruitmentManagement() {
           <Button onClick={() => setViewDialog(false)}>Close</Button>
           {isHR && selectedApp && selectedApp.status === 'For Interview' && (
             <Button variant="outlined" color="info" startIcon={<CalendarMonth />}
+              disabled={!!selectedApp?.interviewDate}
               onClick={() => { setInterviewDialog(true); setIForm({ interviewDate: selectedApp.interviewDate ?? '', interviewTime: selectedApp.interviewTime ?? '', interviewLocation: selectedApp.interviewLocation ?? 'HR Office, Buenaventura Estate', interviewNotes: selectedApp.interviewNotes ?? '' }); }}>
               Schedule Interview
             </Button>

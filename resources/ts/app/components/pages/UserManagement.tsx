@@ -10,17 +10,18 @@ import {
   AddCircleOutline, Sync, EditNote, Visibility, VisibilityOff, Password, DeleteOutline,
   AdminPanelSettings, Badge,
 } from '@mui/icons-material';
-import { API, HEADERS } from '../../lib/api';
+import { supabase } from "../../lib/supabaseClient";
 import { OUTLETS } from '../../lib/constants';
 
 type UserRole = 'hr' | 'employee' | 'supervisor' | 'gm' | 'accounting';
 
 interface UserAccount {
-  id: string;
+  id: string; // this will be USR-2026-0001
   name: string;
   email: string;
   role: UserRole;
-  employeeId?: string;
+  employeeId?: string; // EMP-2026-0001
+  applicantId?: string; // APP-2026-0001
   outlet?: string;
   password?: string;
   active?: boolean;
@@ -50,6 +51,25 @@ const ROLE_COLORS: Record<string, any> = {
   gm: 'warning', accounting: 'success',
 };
 
+const makeLoginText = (firstName?: string, lastName?: string) => {
+  return `${firstName ?? ""}${lastName ?? ""}`
+    .replace(/\s+/g, "")
+    .toLowerCase();
+};
+
+const getNextEmployeeId = (ids: string[]) => {
+  const numbers = ids
+    .map((id) => {
+      const match = id.match(/(\d+)$/);
+      return match ? parseInt(match[1], 10) : 0;
+    })
+    .filter((n) => !isNaN(n));
+
+  const next = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+
+  return `EMP${String(next).padStart(3, "0")}`;
+};
+
 export default function UserManagement() {
   const [users, setUsers]           = useState<UserAccount[]>([]);
   const [loading, setLoading]       = useState(true);
@@ -71,148 +91,322 @@ export default function UserManagement() {
 
   /* ── Data fetching ───────────────────────────────────────────────────��� */
   const fetchUsers = async () => {
-    setLoading(true); setError(null);
-    try {
-      const res  = await fetch(`${API}/users`, { headers: HEADERS });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setUsers((data.users ?? []).filter((u: any) => u != null));
-    } catch (e: any) {
-      setError(`Could not load accounts: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+  setLoading(true);
+  setError(null);
+
+  try {
+    const { data, error } = await supabase
+      .from("user_accounts")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    const mappedUsers: UserAccount[] = (data ?? []).map((u: any) => ({
+  id: u.user_id ?? "",
+  name: u.full_name ?? "",
+  email: u.email ?? "",
+  password: u.password ?? "",
+  role: u.role ?? "employee",
+  employeeId: u.employee_id ?? "",
+  applicantId: u.applicant_id ?? "",
+  outlet: u.outlet ?? "",
+  active: u.is_active ?? true,
+  createdAt: u.created_at ?? "",
+}));
+
+    setUsers(mappedUsers);
+  } catch (e: any) {
+    setError(`Could not load user accounts: ${e.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => { fetchUsers(); }, []);
 
   /** Fetch all existing employee IDs (from /employees + already-loaded users),
    *  compute the next sequential EMP ID, then open the Create dialog. */
   const openCreateDialog = async () => {
-    setEmpIdLoading(true);
-    try {
-      // Collect every known employeeId from the users list already in state
-      const fromUsers = users.map(u => u.employeeId ?? '').filter(Boolean);
+  setEmpIdLoading(true);
 
-      // Also fetch the employee records table for IDs that may not yet have accounts
-      let fromEmployees: string[] = [];
-      try {
-        const res  = await fetch(`${API}/employees`, { headers: HEADERS });
-        const data = await res.json();
-        if (res.ok) {
-          fromEmployees = (data.employees ?? [])
-            .filter((e: any) => e?.id)
-            .map((e: any) => e.id as string);
-        }
-      } catch (_) { /* non-critical */ }
+  try {
+    const { data: employeesData, error: employeesError } = await supabase
+      .from("employees")
+      .select("employee_id");
 
-      const allIds  = [...new Set([...fromUsers, ...fromEmployees])];
-      const nextId  = computeNextEmpId(allIds);
-      setForm({ ...EMPTY_FORM, employeeId: nextId });
-      setOpenAdd(true);
-    } finally {
-      setEmpIdLoading(false);
-    }
-  };
+    if (employeesError) throw employeesError;
+
+    const existingEmployeeIds = (employeesData ?? [])
+      .map((e: any) => e.employee_id)
+      .filter(Boolean);
+
+    const nextEmployeeId = getNextEmployeeId(existingEmployeeIds);
+
+    setForm({
+      ...EMPTY_FORM,
+      employeeId: nextEmployeeId,
+    });
+
+    setOpenAdd(true);
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed to generate employee ID: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setEmpIdLoading(false);
+  }
+};
 
   /* ── Handlers ───────────────────────────────────────────────────────── */
   const handleCreate = async () => {
-    if (!form.name || !form.email || !form.password) {
-      setSnackbar({ open: true, message: 'Name, email/username, and password are required.', severity: 'error' });
-      return;
-    }
-    setSaving(true);
-    try {
-      const res  = await fetch(`${API}/users`, { method: 'POST', headers: HEADERS, body: JSON.stringify(form) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setUsers(prev => [...prev, data.user]);
+  if (!form.name || !form.email || !form.password) {
+    setSnackbar({
+      open: true,
+      message: "Name, email/username, and password are required.",
+      severity: "error",
+    });
+    return;
+  }
 
-      // ── Auto-create Employee Record when role is 'employee' ──────────────
-      if (form.role === 'employee') {
-        try {
-          const empRes = await fetch(`${API}/employees`, {
-            method: 'POST', headers: HEADERS,
-            body: JSON.stringify({
-              name: form.name,
-              email: form.email,
-              outlet: form.outlet ?? '',
-              position: '',
-              department: '',
-              status: 'Active',
-              contact: '',
-              dateHired: new Date().toISOString().split('T')[0],
-            }),
-          });
-          if (!empRes.ok) console.warn('Auto employee record creation failed (non-blocking)');
-        } catch (_) { console.warn('Auto employee record creation skipped'); }
-      }
-      // ────────────────────────────────────────────────────────────────────
+  setSaving(true);
 
-      setOpenAdd(false);
-      setForm(EMPTY_FORM);
-      setSnackbar({ open: true, message: `✅ Account created for ${data.user.name}!${form.role === 'employee' ? ' Employee record also created.' : ''}`, severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    } finally {
-      setSaving(false);
+  try {
+    const { count: userCount } = await supabase
+      .from("user_accounts")
+      .select("*", { count: "exact", head: true });
+
+    const userId = `USR-2026-${String((userCount ?? 0) + 1).padStart(4, "0")}`;
+
+    const { data: userData, error: userError } = await supabase
+      .from("user_accounts")
+      .insert({
+        user_id: userId,
+        employee_id: form.employeeId,
+        full_name: form.name,
+        email: form.email,
+        password: form.password,
+        role: form.role,
+        outlet: form.outlet,
+        is_active: true,
+      })
+      .select()
+      .single();
+
+    if (userError) throw userError;
+
+    if (form.role === "employee") {
+      const nameParts = form.name.trim().split(" ");
+      const firstName = nameParts[0] ?? "";
+      const lastName = nameParts.slice(1).join(" ") || firstName;
+
+      const { error: employeeError } = await supabase
+        .from("employees")
+        .insert({
+          employee_id: form.employeeId,
+          first_name: firstName,
+          last_name: lastName,
+          email: form.email,
+          outlet: form.outlet,
+          status: "Active",
+          hire_date: new Date().toISOString().split("T")[0],
+        });
+
+      if (employeeError) throw employeeError;
     }
-  };
+
+    const newUser: UserAccount = {
+      id: userData.user_id,
+      name: userData.full_name,
+      email: userData.email,
+      password: userData.password,
+      role: userData.role,
+      employeeId: userData.employee_id,
+      applicantId: userData.applicant_id,
+      outlet: userData.outlet,
+      active: userData.is_active,
+      createdAt: userData.created_at,
+    };
+
+    setUsers((prev) => [...prev, newUser]);
+
+    setOpenAdd(false);
+    setForm(EMPTY_FORM);
+
+    setSnackbar({
+      open: true,
+      message: `✅ Account created with Employee ID ${form.employeeId}`,
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   // Edit — also handles optional password reset in one call
   const handleEdit = async () => {
-    if (!selectedUser) return;
-    setSaving(true);
-    try {
-      const payload: any = { ...editForm };
-      if (newPwd.trim()) payload.password = newPwd.trim();
-      const res  = await fetch(`${API}/users/${selectedUser.id}`, { method: 'PUT', headers: HEADERS, body: JSON.stringify(payload) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setUsers(prev => prev.map(u => u.id === selectedUser.id ? data.user : u));
-      setOpenEdit(false);
-      setNewPwd('');
-      setShowEditPwd(false);
-      setSnackbar({ open: true, message: newPwd.trim() ? '✅ Account updated & password reset!' : '✅ Account updated!', severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    } finally {
-      setSaving(false);
+  if (!selectedUser) return;
+
+  setSaving(true);
+
+  try {
+    const updateData: any = {
+      full_name: editForm.name,
+      email: editForm.email,
+      role: editForm.role,
+      outlet: editForm.outlet,
+      employee_id: editForm.employeeId,
+      is_active: editForm.active ?? true,
+    };
+
+    if (newPwd.trim()) {
+      updateData.password = newPwd.trim();
     }
-  };
+
+    let result = await supabase
+      .from("user_accounts")
+      .update(updateData)
+      .eq("user_id", selectedUser.id)
+      .select()
+      .maybeSingle();
+
+    if (!result.data) {
+      result = await supabase
+        .from("user_accounts")
+        .update(updateData)
+        .eq("email", selectedUser.email)
+        .select()
+        .maybeSingle();
+    }
+
+    if (result.error) throw result.error;
+    if (!result.data) throw new Error("No matching user account found.");
+
+    const data = result.data;
+
+    const updatedUser: UserAccount = {
+      id: data.user_id ?? "",
+      name: data.full_name ?? "",
+      email: data.email ?? "",
+      password: data.password ?? "",
+      role: data.role ?? "employee",
+      employeeId: data.employee_id ?? "",
+      applicantId: data.applicant_id ?? "",
+      outlet: data.outlet ?? "",
+      active: data.is_active ?? true,
+      createdAt: data.created_at ?? "",
+    };
+
+    setUsers(prev =>
+      prev.map(u => u.id === selectedUser.id ? updatedUser : u)
+    );
+
+    setOpenEdit(false);
+    setNewPwd("");
+    setShowEditPwd(false);
+
+    setSnackbar({
+      open: true,
+      message: newPwd.trim()
+        ? "✅ Account updated & password reset!"
+        : "✅ Account updated!",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   /** Toggle active/inactive — works from both the table and the Edit dialog */
   const handleToggleActive = async (user: UserAccount) => {
-    const newActive = user.active === false; // false → true, true/undefined → false
-    try {
-      const res = await fetch(`${API}/users/${user.id}`, {
-        method: 'PUT', headers: HEADERS, body: JSON.stringify({ active: newActive }),
-      });
-      if (!res.ok) throw new Error('Update failed');
-      setUsers(prev => prev.map(u => u.id === user.id ? { ...u, active: newActive } : u));
-      // Keep the dialog in sync if this user is currently open
-      setSelectedUser(prev => prev?.id === user.id ? { ...prev, active: newActive } : prev);
-      setSnackbar({
-        open: true,
-        message: `Account ${newActive ? 'activated' : 'deactivated'} successfully!`,
-        severity: 'success',
-      });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    }
-  };
+  const newActive = user.active === false;
+
+  try {
+    const { error } = await supabase
+      .from("user_accounts")
+      .update({
+          is_active: newActive,
+        })
+      .eq("user_id", user.id);
+
+    if (error) throw error;
+
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === user.id
+          ? {
+              ...u,
+              active: newActive,
+              status: newActive ? "Active" : "Inactive",
+            }
+          : u
+      )
+    );
+
+    setSelectedUser(prev =>
+      prev?.id === user.id
+        ? {
+            ...prev,
+            active: newActive,
+            status: newActive ? "Active" : "Inactive",
+          }
+        : prev
+    );
+
+    setSnackbar({
+      open: true,
+      message: `Account ${newActive ? "activated" : "deactivated"} successfully!`,
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const handleDelete = async (u: UserAccount) => {
-    if (!window.confirm(`Permanently delete account for ${u.name} (${u.id})? This cannot be undone.`)) return;
-    try {
-      const res = await fetch(`${API}/users/${u.id}`, { method: 'DELETE', headers: HEADERS });
-      if (!res.ok) throw new Error('Delete failed');
-      setUsers(prev => prev.filter(x => x.id !== u.id));
-      setSnackbar({ open: true, message: `🗑️ Account for ${u.name} deleted.`, severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Failed: ${e.message}`, severity: 'error' });
-    }
-  };
+  if (!window.confirm(`Permanently delete account for ${u.name} (${u.id})? This cannot be undone.`)) return;
+
+  try {
+    const { error } = await supabase
+      .from("user_accounts")
+      .delete()
+      .eq("user_id", u.id);
+
+    if (error) throw error;
+
+    setUsers(prev => prev.filter(x => x.id !== u.id));
+
+    setSnackbar({
+      open: true,
+      message: `🗑️ Account for ${u.name} deleted.`,
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   /* ── Render ─────────────────────────────────────────────────────────── */
   return (
@@ -263,12 +457,10 @@ export default function UserManagement() {
           <Table sx={{ minWidth: 900 }}>
             <TableHead>
               <TableRow>
-                <TableCell>ID</TableCell>
+                <TableCell>USER ID</TableCell>
                 <TableCell>Full Name</TableCell>
                 <TableCell>Email / Username</TableCell>
                 <TableCell>Role</TableCell>
-                <TableCell>Outlet</TableCell>
-                <TableCell>Employee ID</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
@@ -282,55 +474,91 @@ export default function UserManagement() {
                 </TableRow>
               ) : users.map(u => (
                 <TableRow key={u.id} hover>
-                  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1, fontWeight: 500 }}><Chip label={u.id} size="small" variant="outlined" /></TableCell>
-                  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1, fontWeight: 600 }}>{u.name}</TableCell>
-                  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>{u.email}</TableCell>
-                  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>
-                    <Chip
-                      label={ROLES.find(r => r.value === u.role)?.label ?? u.role}
-                      size="small"
-                      color={ROLE_COLORS[u.role] ?? 'default'}
-                    />
-                  </TableCell>
-                  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>{u.outlet || '—'}</TableCell>
-                  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>{u.employeeId || '—'}</TableCell>
-                  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>
-                    <Chip
-                      label={u.active === false ? 'Inactive' : 'Active'}
-                      size="small"
-                      color={u.active === false ? 'default' : 'success'}
-                    />
-                  </TableCell>
-                  {/* Actions — always full opacity regardless of account status */}
-                  <TableCell>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}>
-                      <Chip
-                        label="Edit Account"
-                        size="small"
-                        clickable
-                        variant="outlined"
-                        color="primary"
-                        onClick={() => {
-                          setSelectedUser(u);
-                          setEditForm({ name: u.name, email: u.email, role: u.role, outlet: u.outlet, employeeId: u.employeeId });
-                          setNewPwd('');
-                          setShowEditPwd(false);
-                          setOpenEdit(true);
-                        }}
-                        sx={{ minWidth: 110 }}
-                      />
-                      <Chip
-                        label="Delete Account"
-                        size="small"
-                        clickable
-                        variant="outlined"
-                        color="error"
-                        onClick={() => handleDelete(u)}
-                        sx={{ minWidth: 110 }}
-                      />
-                    </Box>
-                  </TableCell>
-                </TableRow>
+
+  {/* USER ID */}
+  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1, fontWeight: 500 }}>
+    <Chip
+      label={u.id || '—'}
+      size="small"
+      variant="outlined"
+    />
+  </TableCell>
+
+ {/* FULL NAME */}
+  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1, fontWeight: 600 }}>
+    {u.name}
+  </TableCell>
+
+  {/* EMAIL */}
+  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>
+    {u.email}
+  </TableCell>
+
+  {/* ROLE */}
+  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>
+    <Chip
+      label={ROLES.find(r => r.value === u.role)?.label ?? u.role}
+      size="small"
+      color={ROLE_COLORS[u.role] ?? 'default'}
+    />
+  </TableCell>
+
+  {/* STATUS */}
+  <TableCell sx={{ opacity: u.active === false ? 0.45 : 1 }}>
+    <Chip
+      label={u.active === false ? 'Inactive' : 'Active'}
+      size="small"
+      color={u.active === false ? 'default' : 'success'}
+    />
+  </TableCell>
+
+  {/* ACTIONS */}
+  <TableCell>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 0.5,
+        alignItems: 'flex-start'
+      }}
+    >
+      <Chip
+        label="Edit Account"
+        size="small"
+        clickable
+        variant="outlined"
+        color="primary"
+        onClick={() => {
+          setSelectedUser(u);
+
+          setEditForm({
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            outlet: u.outlet,
+            employeeId: u.employeeId,
+            applicantId: u.applicantId,
+          });
+
+          setNewPwd('');
+          setShowEditPwd(false);
+          setOpenEdit(true);
+        }}
+        sx={{ minWidth: 110 }}
+      />
+
+      <Chip
+        label="Delete Account"
+        size="small"
+        clickable
+        variant="outlined"
+        color="error"
+        onClick={() => handleDelete(u)}
+        sx={{ minWidth: 110 }}
+      />
+    </Box>
+  </TableCell>
+</TableRow>
               ))}
             </TableBody>
           </Table>
@@ -431,12 +659,6 @@ export default function UserManagement() {
               </TextField>
             </Grid>
             <Grid size={{ xs: 12, md: 6 }}>
-              <TextField fullWidth select label="Outlet / Branch" value={editForm.outlet ?? ''} onChange={e => setEditForm({ ...editForm, outlet: e.target.value })} InputLabelProps={{ shrink: true }}>
-                <MenuItem key="edit-outlet-empty" value="">Select Outlet…</MenuItem>
-                {OUTLETS.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
-              </TextField>
-            </Grid>
-            <Grid size={12}>
               <TextField fullWidth label="Linked Employee ID" value={editForm.employeeId ?? ''} onChange={e => setEditForm({ ...editForm, employeeId: e.target.value })} />
             </Grid>
 

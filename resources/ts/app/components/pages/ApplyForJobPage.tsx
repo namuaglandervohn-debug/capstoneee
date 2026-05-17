@@ -136,19 +136,43 @@ const applicantIdGenerated = `APP-2026-${nextNumber}`;
       .from("applicants")
       .insert({
         applicant_id: applicantIdGenerated,
+
+        name: `${formData.firstName} ${formData.middleName} ${formData.lastName}`.replace(/\s+/g, " ").trim(),
         first_name: formData.firstName,
         middle_name: formData.middleName,
         last_name: formData.lastName,
+        suffix: formData.suffix,
+
+        gender: formData.gender,
+        civil_status: formData.civilStatus,
+        birthdate: formData.birthdate || null,
+        birthplace: formData.birthplace,
+        height: formData.height,
+        weight: formData.weight,
+
         email: formData.email,
         phone_number: formData.contactNumber,
         address: formData.address,
+
         position_applied: formData.position,
-        gender: formData.gender,
-        civil_status: formData.civilStatus,
         education: formData.education,
         experience: formData.experience,
+        cover_letter: "",
+
+        tin: formData.tin,
+        sss: formData.sss,
+        philhealth: formData.philhealth,
+        pagibig: formData.pagibig,
+
+        emergency_contact: `${formData.emergencyContactName} - ${formData.emergencyContactRelation} - ${formData.emergencyContactPhone}`,
+
+        resume_file_name: resumeFiles[0]?.name ?? null,
+        resume_file_data: resumeFileData,
+        supporting_documents: supportingFiles.map(f => f.name),
+        supporting_document_files: supportingDocumentFiles,
+
         status: "Submitted",
-      })
+})
       .select()
       .single();
 

@@ -6,7 +6,7 @@ import {
   DialogContent, DialogActions, IconButton, Tooltip,
 } from '@mui/material';
 import { ArrowBackIosNew, EditNote, Save, CancelOutlined, AccountCircle, FileDownload, Visibility, InsertDriveFile, PictureAsPdf, Article, Image as ImageIcon, DeleteOutline } from '@mui/icons-material';
-import { API, HEADERS } from '../../lib/api';
+import { supabase } from '../../lib/supabaseClient';
 import { OUTLETS, POSITIONS, DEPARTMENTS } from '../../lib/constants';
 import FileUploadField from '../FileUploadField';
 import { useAuth } from '../../context/AuthContext';
@@ -16,12 +16,43 @@ interface DocFile {
 }
 
 interface Employee {
-  id: string; name: string; position: string; outlet: string;
-  status: 'Active' | 'On Leave' | 'Resigned'; contact: string;
-  email?: string; address?: string; department?: string;
-  supervisor?: string; dateHired?: string; emergencyContact?: string;
-  createdAt?: string; updatedAt?: string;
+  id: string;
+  name: string;
+
+  first_name?: string;
+  middle_name?: string;
+  last_name?: string;
+  suffix?: string;
+
+  position: string;
+  outlet: string;
+  status: string;
+  contact: string;
+  email: string;
+
+  address?: string;
+  department?: string;
+  supervisor?: string;
+  dateHired?: string;
+  emergencyContact?: string;
+  createdAt?: string;
+  updatedAt?: string;
+
   documents?: DocFile[];
+  employeeDocumentsOnly?: DocFile[];
+
+  gender?: string;
+  civilStatus?: string;
+  birthdate?: string;
+  birthplace?: string;
+  employmentType?: string;
+  salary?: string | number;
+  education?: string;
+  experience?: string;
+  tin?: string;
+  sss?: string;
+  philhealth?: string;
+  pagibig?: string;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -52,6 +83,17 @@ function DocIcon({ name, type }: { name: string; type?: string }) {
   return <InsertDriveFile fontSize="small" sx={{ color: '#546E7A' }} />;
 }
 
+const InfoItem = ({ label, value }: { label: string; value?: any }) => (
+  <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+    <Typography variant="caption" color="text.secondary">
+      {label}
+    </Typography>
+    <Typography variant="body1" fontWeight={500}>
+      {value || "—"}
+    </Typography>
+  </Grid>
+);
+
 export default function EmployeeProfile() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -69,71 +111,231 @@ export default function EmployeeProfile() {
   const [previewDoc, setPreviewDoc] = useState<{ name: string; data: string; type: string } | null>(null);
 
   useEffect(() => {
-    if (!id) return;
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const res = await fetch(`${API}/employees/${id}`, { headers: HEADERS });
-        const data = await res.json();
-        if (res.status === 404) { setError('Employee not found in the database.'); return; }
-        if (!res.ok) throw new Error(data.error ?? 'Server error');
-        setEmployee(data.employee);
-        setEditForm(data.employee);
-      } catch (e: any) {
-        setError(`Could not load employee: ${e.message}`);
-      } finally {
-        setLoading(false);
+  if (!id) return;
+
+  (async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const { data, error } = await supabase
+        .from("employees")
+        .select("*")
+        .eq("employee_id", id)
+        .single();
+
+      if (error) throw error;
+
+      let applicantDocs: DocFile[] = [];
+
+      if (data.applicant_id) {
+        const { data: applicantData, error: applicantError } = await supabase
+          .from("applicants")
+          .select("resume_file_name, resume_file_data, supporting_document_files")
+          .eq("applicant_id", data.applicant_id)
+          .maybeSingle();
+
+        if (applicantError) throw applicantError;
+
+        const resumeDoc =
+          applicantData?.resume_file_name && applicantData?.resume_file_data
+            ? [{
+                name: applicantData.resume_file_name,
+                type: "application/pdf",
+                data: applicantData.resume_file_data,
+              }]
+            : [];
+
+        const supportingDocs = Array.isArray(applicantData?.supporting_document_files)
+          ? applicantData.supporting_document_files
+          : [];
+
+        applicantDocs = [...resumeDoc, ...supportingDocs];
       }
-    })();
-  }, [id]);
+
+      const employeeDocs = Array.isArray(data.documents) ? data.documents : [];
+
+      const employeeData: Employee = {
+        id: data.employee_id,
+        name: `${data.first_name ?? ""} ${data.middle_name ?? ""} ${data.last_name ?? ""} ${data.suffix ?? ""}`.replace(/\s+/g, " ").trim(),
+        first_name: data.first_name ?? "",
+        middle_name: data.middle_name ?? "",
+        last_name: data.last_name ?? "",
+        suffix: data.suffix ?? "",
+        position: data.position ?? "",
+        outlet: data.outlet ?? "",
+        status: data.status ?? "Active",
+        contact: data.phone_number ?? "",
+        email: data.email ?? "",
+        address: data.address ?? "",
+        department: data.department ?? "",
+        supervisor: data.supervisor ?? "",
+        dateHired: data.hire_date ?? "",
+        emergencyContact: data.emergency_contact ?? "",
+        createdAt: data.created_at ?? "",
+        updatedAt: data.updated_at ?? "",
+        documents: [
+  ...new Map(
+    [...applicantDocs, ...employeeDocs].map(doc => [doc.name, doc])
+  ).values(),
+],
+        employeeDocumentsOnly: employeeDocs,
+
+        gender: data.gender ?? "",
+        civilStatus: data.civil_status ?? "",
+        birthdate: data.birthdate ?? "",
+        birthplace: data.birthplace ?? "",
+        employmentType: data.employment_type ?? "",
+        salary: data.salary ?? "",
+        education: data.education ?? "",
+        experience: data.experience ?? "",
+        tin: data.tin ?? "",
+        sss: data.sss ?? "",
+        philhealth: data.philhealth ?? "",
+        pagibig: data.pagibig ?? "",
+      };
+
+      setEmployee(employeeData);
+      setEditForm(employeeData);
+    } catch (e: any) {
+      setError(`Could not load employee: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  })();
+}, [id]);
+
 
   const handleSave = async () => {
-    if (!editForm || !id) return;
-    setSaving(true);
-    try {
-      // Encode any newly uploaded documents and merge with existing
-      let updatedDocs = [...(editForm.documents ?? [])];
-      if (newDocFiles.length > 0) {
-        const encoded = await Promise.all(
-          newDocFiles.map(async f => ({ name: f.name, type: f.type, data: await fileToBase64(f) }))
-        );
-        updatedDocs = [...updatedDocs, ...encoded];
-      }
+  if (!editForm || !id) return;
 
-      const res = await fetch(`${API}/employees/${id}`, {
-        method: 'PUT', headers: HEADERS,
-        body: JSON.stringify({ ...editForm, documents: updatedDocs }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Server error');
-      setEmployee(data.employee);
-      setEditForm(data.employee);
-      setEditing(false);
-      setNewDocFiles([]);
-      setSnackbar({ open: true, message: 'Profile updated successfully!', severity: 'success' });
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Save failed: ${e.message}`, severity: 'error' });
-    } finally {
-      setSaving(false);
+  setSaving(true);
+
+  try {
+    let updatedDocs = [...(editForm.employeeDocumentsOnly ?? [])];
+
+    if (newDocFiles.length > 0) {
+      const encoded = await Promise.all(
+        newDocFiles.map(async f => ({
+          name: f.name,
+          type: f.type,
+          data: await fileToBase64(f),
+        }))
+      );
+
+      updatedDocs = [...updatedDocs, ...encoded];
     }
-  };
+
+    const { data, error } = await supabase
+      .from("employees")
+      .update({
+        first_name: employee?.first_name ?? "",
+        middle_name: employee?.middle_name ?? "",
+        last_name: employee?.last_name ?? "",
+        suffix: employee?.suffix ?? "",
+        email: editForm.email,
+        phone_number: editForm.contact,
+        address: editForm.address,
+        department: editForm.department,
+        position: editForm.position,
+        outlet: editForm.outlet ?? "",
+        status: editForm.status,
+        emergency_contact: editForm.emergencyContact,
+        documents: updatedDocs,
+      })
+      .eq("employee_id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    const updatedEmployee = {
+  ...editForm,
+  id: data.employee_id,
+  name: `${data.first_name ?? ""} ${data.middle_name ?? ""} ${data.last_name ?? ""} ${data.suffix ?? employee?.suffix ?? ""}`.replace(/\s+/g, " ").trim(),
+  first_name: data.first_name ?? "",
+  middle_name: data.middle_name ?? "",
+  last_name: data.last_name ?? "",
+  suffix: data.suffix ?? employee?.suffix ?? "",
+  position: data.position ?? "",
+  outlet: data.outlet ?? editForm.outlet ?? "",
+  status: data.status ?? "Active",
+  contact: data.phone_number ?? "",
+  email: data.email ?? "",
+  address: data.address ?? "",
+  department: data.department ?? "",
+  supervisor: data.supervisor ?? "",
+  dateHired: data.hire_date ?? "",
+  emergencyContact: data.emergency_contact ?? "",
+  documents: [...(employee?.documents ?? []).filter(d => !(employee?.employeeDocumentsOnly ?? []).some(ed => ed.name === d.name)), ...updatedDocs],
+  employeeDocumentsOnly: updatedDocs,
+  createdAt: data.created_at ?? "",
+};
+
+    setEmployee(updatedEmployee);
+    setEditForm(updatedEmployee);
+    setEditing(false);
+    setNewDocFiles([]);
+
+    setSnackbar({
+      open: true,
+      message: "Profile updated successfully!",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Save failed: ${e.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   const handleDelete = async () => {
-    if (!id) return;
-    try {
-      const res = await fetch(`${API}/employees/${id}`, { method: 'DELETE', headers: HEADERS });
-      if (!res.ok) throw new Error('Delete failed');
-      navigate('/dashboard/employees');
-    } catch (e: any) {
-      setSnackbar({ open: true, message: `Delete failed: ${e.message}`, severity: 'error' });
-    }
-    setDeleteDialog(false);
-  };
+  if (!id) return;
+
+  try {
+    const { error } = await supabase
+      .from("employees")
+      .delete()
+      .eq("employee_id", id);
+
+    if (error) throw error;
+
+    setSnackbar({
+      open: true,
+      message: "Employee deleted successfully!",
+      severity: "success",
+    });
+
+    navigate('/dashboard/employees');
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Delete failed: ${e.message}`,
+      severity: 'error',
+    });
+  }
+
+  setDeleteDialog(false);
+};
 
   const handleRemoveDoc = (idx: number) => {
-    if (!editForm) return;
-    setEditForm({ ...editForm, documents: editForm.documents?.filter((_, i) => i !== idx) });
-  };
+  if (!editForm) return;
+
+  const docToRemove = editForm.documents?.[idx];
+  if (!docToRemove) return;
+
+  setEditForm({
+    ...editForm,
+    documents: editForm.documents?.filter((_, i) => i !== idx),
+    employeeDocumentsOnly: editForm.employeeDocumentsOnly?.filter(
+      (doc) => doc.name !== docToRemove.name
+    ),
+  });
+};
 
   if (loading) {
     return (
@@ -153,33 +355,44 @@ export default function EmployeeProfile() {
   }
 
   const field = (key: keyof Employee, label: string, options?: string[]) => {
-    if (editing) {
-      if (options) {
-        return (
-          <TextField fullWidth select label={label} value={editForm[key] ?? ''} margin="normal"
-            InputLabelProps={{ shrink: true }}
-            onChange={e => setEditForm({ ...editForm, [key]: e.target.value as any })}>
-            <MenuItem key="__empty__" value="">Select {label}…</MenuItem>
-            {options.map(o => <MenuItem key={o} value={o}>{o}</MenuItem>)}
-          </TextField>
-        );
-      }
-      if (key === 'contact') {
-        return (
-          <TextField fullWidth label={label} value={editForm[key] ?? ''} margin="normal"
-            placeholder="09XXXXXXXXX"
-            inputProps={{ maxLength: 11, inputMode: 'numeric' }}
-            helperText={`${((editForm[key] ?? '') as string).length}/11`}
-            onChange={e => setEditForm({ ...editForm, [key]: e.target.value.replace(/\D/g, '').slice(0, 11) as any })} />
-        );
-      }
+  if (editing) {
+    if (options) {
+      const currentValue = String(editForm?.[key] ?? "");
+      const finalOptions = currentValue && !options.includes(currentValue)
+        ? [currentValue, ...options]
+        : options;
+
       return (
-        <TextField fullWidth label={label} value={editForm[key] ?? ''} margin="normal"
-          onChange={e => setEditForm({ ...editForm, [key]: e.target.value as any })} />
+        <TextField
+          fullWidth
+          select
+          label={label}
+          value={currentValue}
+          margin="normal"
+          InputLabelProps={{ shrink: true }}
+          onChange={e => setEditForm({ ...editForm, [key]: e.target.value as any })}
+        >
+          <MenuItem key="__empty__" value="">Select {label}…</MenuItem>
+          {finalOptions.map(o => (
+            <MenuItem key={o} value={o}>{o}</MenuItem>
+          ))}
+        </TextField>
       );
     }
-    return <TextField fullWidth label={label} value={employee[key] ?? '—'} margin="normal" disabled />;
-  };
+
+    return (
+      <TextField
+        fullWidth
+        label={label}
+        value={editForm?.[key] ?? ""}
+        margin="normal"
+        onChange={e => setEditForm({ ...editForm, [key]: e.target.value as any })}
+      />
+    );
+  }
+
+  return <TextField fullWidth label={label} value={employee[key] ?? "—"} margin="normal" disabled />;
+};
 
   return (
     <Box>
@@ -210,7 +423,15 @@ export default function EmployeeProfile() {
                 </>
               ) : (
                 <>
-                  <Button variant="outlined" startIcon={<EditNote />} onClick={() => setEditing(true)}>Edit Profile</Button>
+                  <Button variant="outlined" startIcon={<EditNote />} onClick={() => {
+  setEditForm({
+    ...employee,
+    documents: employee?.documents ?? [],
+    employeeDocumentsOnly: employee?.employeeDocumentsOnly ?? [],
+  });
+  setEditing(true);
+}}>Edit Profile
+                </Button>
                   <Button variant="outlined" color="error" size="small" onClick={() => setDeleteDialog(true)}>Remove</Button>
                 </>
               )
@@ -233,8 +454,18 @@ export default function EmployeeProfile() {
           <Grid size={{ xs: 12, md: 6 }}>{field('email', 'Email Address')}</Grid>
           <Grid size={{ xs: 12, md: 6 }}>{field('dateHired', 'Date Hired')}</Grid>
           <Grid size={{ xs: 12, md: 6 }}>{field('supervisor', 'Direct Supervisor')}</Grid>
-          <Grid size={12}>{field('address', 'Home Address')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('gender', 'Gender')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('civilStatus', 'Civil Status')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('birthdate', 'Birthdate')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('birthplace', 'Birthplace')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('education', 'Educational Attainment')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('experience', 'Work Experience')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('tin', 'TIN')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('sss', 'SSS')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('philhealth', 'PhilHealth')}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>{field('pagibig', 'Pag-IBIG')}</Grid>
           <Grid size={12}>{field('emergencyContact', 'Emergency Contact (Name & Number)')}</Grid>
+          <Grid size={12}>{field('address', 'Home Address')}</Grid>
         </Grid>
 
         {/* ── Documents Section ── */}

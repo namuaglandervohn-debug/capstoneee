@@ -35,19 +35,13 @@ import {
   DeleteOutline,
   Sync,
 } from "@mui/icons-material";
-import { projectId, publicAnonKey } from "../../../utils/supabase/info";
+import { supabase } from "../../lib/supabaseClient";
 import {
   OUTLETS,
   POSITIONS,
   DEPARTMENTS,
 } from "../../lib/constants";
 import { useAuth } from "../../context/AuthContext";
-
-const API = `https://${projectId}.supabase.co/functions/v1/make-server-24f1182d`;
-const HEADERS = {
-  "Content-Type": "application/json",
-  Authorization: `Bearer ${publicAnonKey}`,
-};
 
 interface Employee {
   id: string;
@@ -125,27 +119,60 @@ export default function EmployeeRecords() {
   >({});
 
   const fetchEmployees = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API}/employees`, {
-        headers: HEADERS,
-      });
-      const data = await res.json();
-      if (!res.ok)
-        throw new Error(data.error ?? "Unknown server error");
-      // Strip out any null/invalid entries (e.g. ghost keys left after deletes)
-      const safe = (data.employees ?? []).filter(
-        (e: any) => e != null && typeof e.name === "string",
-      );
-      setEmployees(safe);
-    } catch (err: any) {
-      console.error("Fetch employees error:", err);
-      setError(`Could not load employees: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+  setLoading(true);
+  setError(null);
+
+  try {
+    const { data: employeesData, error: employeesError } = await supabase
+      .from("employees")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (employeesError) throw employeesError;
+
+    const { data: userAccountsData, error: userAccountsError } = await supabase
+      .from("user_accounts")
+      .select("employee_id, outlet");
+
+    if (userAccountsError) throw userAccountsError;
+
+    const outletMap = new Map(
+      (userAccountsData ?? []).map((u: any) => [
+        u.employee_id,
+        u.outlet,
+      ])
+    );
+
+    const safe = (employeesData ?? []).map((e: any) => ({
+      id: e.employee_id,
+      name: `${e.first_name ?? ""} ${e.middle_name ?? ""} ${e.last_name ?? ""} ${e.suffix ?? ""}`
+  .replace(/\s+/g, " ")
+  .trim(),
+      position: e.position ?? "",
+      department: e.department ?? "",
+
+      // Fetch outlet from user_accounts table first
+      outlet: outletMap.get(e.employee_id) || e.outlet || "",
+
+      status: e.status ?? "Active",
+      contact: e.phone_number ?? "",
+      email: e.email ?? "",
+      dateHired: e.hire_date ?? "",
+      createdAt: e.created_at ?? "",
+      dailySchedule: e.daily_schedule ?? "",
+      breakTime: e.break_time ?? "",
+      timeIn: e.time_in ?? "",
+      timeOut: e.time_out ?? "",
+    }));
+
+    setEmployees(safe);
+  } catch (err: any) {
+    console.error("Fetch employees error:", err);
+    setError(`Could not load employees: ${err.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
     fetchEmployees();
@@ -165,91 +192,107 @@ export default function EmployeeRecords() {
   };
 
   const handleAddEmployee = async () => {
-    if (!validate()) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`${API}/employees`, {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify(form),
-      });
-      const data = await res.json();
-      if (!res.ok)
-        throw new Error(data.error ?? "Unknown server error");
-      setEmployees((prev) => [...prev, data.employee]);
+  if (!validate()) return;
 
-      // ── Auto-create user account ──────────────────────────────────────────
-      // Generate email/username from name (lowercase, no spaces)
-      const autoEmail =
-        form.email?.trim() ||
-        `${form.name.toLowerCase().replace(/\s+/g, ".")}@buenaventura.com`;
-      const autoPassword = "password";
-      try {
-        await fetch(`${API}/users`, {
-          method: "POST",
-          headers: HEADERS,
-          body: JSON.stringify({
-            name: form.name,
-            email: autoEmail,
-            role: "employee",
-            employeeId: data.employee.id,
-            outlet: form.outlet,
-            password: autoPassword,
-          }),
-        });
-      } catch (_) {
-        // Non-blocking: log but don't fail the employee creation
-        console.warn(
-          "Auto account creation skipped (may already exist)",
-        );
-      }
-      // ─────────────────────────────────────────────────────────────────────
+  setSaving(true);
 
-      setDialogOpen(false);
-      setForm(EMPTY_FORM);
-      setFormErrors({});
-      setSnackbar({
-        open: true,
-        message: `✅ Employee ${data.employee.id} added & user account auto-created (login: ${autoEmail} / password: ${autoPassword})`,
-        severity: "success",
-      });
-    } catch (err: any) {
-      console.error("Add employee error:", err);
-      setSnackbar({
-        open: true,
-        message: `Failed to add employee: ${err.message}`,
-        severity: "error",
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
+  try {
+    const { count } = await supabase
+      .from("employees")
+      .select("*", { count: "exact", head: true });
+
+    const nextNumber = String((count ?? 0) + 1).padStart(4, "0");
+    const employeeIdGenerated = `EMP-2026-${nextNumber}`;
+
+    const nameParts = form.name.trim().split(" ");
+    const firstName = nameParts[0] ?? "";
+    const lastName = nameParts.slice(1).join(" ") || firstName;
+
+    const { data: employeeData, error } = await supabase
+      .from("employees")
+      .insert({
+        employee_id: employeeIdGenerated,
+        first_name: firstName,
+        middle_name: "",
+        last_name: lastName,
+        email: form.email || null,
+        phone_number: form.contact,
+        department: form.department,
+        position: form.position,
+        outlet: form.outlet,
+        status: form.status,
+        hire_date: form.dateHired || null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    const newEmployee: Employee = {
+      id: employeeData.employee_id,
+      name: `${employeeData.first_name ?? ""} ${employeeData.middle_name ?? ""} ${employeeData.last_name ?? ""} ${employeeData.suffix ?? ""}`.replace(/\s+/g, " ").trim(),
+      position: employeeData.position ?? "",
+      department: employeeData.department ?? "",
+      outlet: employeeData.outlet ?? "",
+      status: employeeData.status ?? "Active",
+      contact: employeeData.phone_number ?? "",
+      email: employeeData.email ?? "",
+      dateHired: employeeData.hire_date ?? "",
+      createdAt: employeeData.created_at ?? "",
+      dailySchedule: employeeData.daily_schedule ?? "",
+      breakTime: employeeData.break_time ?? "",
+      timeIn: employeeData.time_in ?? "",
+      timeOut: employeeData.time_out ?? "",
+    };
+
+    setEmployees((prev) => [newEmployee, ...prev]);
+    setDialogOpen(false);
+    setForm(EMPTY_FORM);
+    setFormErrors({});
+
+    setSnackbar({
+      open: true,
+      message: `✅ Employee ${employeeIdGenerated} added successfully.`,
+      severity: "success",
+    });
+  } catch (err: any) {
+    console.error("Add employee error:", err);
+    setSnackbar({
+      open: true,
+      message: `Failed to add employee: ${err.message}`,
+      severity: "error",
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   const handleDelete = async (emp: Employee) => {
-    if (!window.confirm(`Remove ${emp.name} (${emp.id})?`))
-      return;
-    try {
-      const res = await fetch(`${API}/employees/${emp.id}`, {
-        method: "DELETE",
-        headers: HEADERS,
-      });
-      if (!res.ok) throw new Error("Delete failed");
-      setEmployees((prev) =>
-        prev.filter((e) => e.id !== emp.id),
-      );
-      setSnackbar({
-        open: true,
-        message: `${emp.name} removed.`,
-        severity: "success",
-      });
-    } catch (err: any) {
-      setSnackbar({
-        open: true,
-        message: `Failed to delete: ${err.message}`,
-        severity: "error",
-      });
-    }
-  };
+  if (!window.confirm(`Remove ${emp.name} (${emp.id})?`)) return;
+
+  try {
+    const { error } = await supabase
+      .from("employees")
+      .delete()
+      .eq("employee_id", emp.id);
+
+    if (error) throw error;
+
+    setEmployees((prev) => prev.filter((e) => e.id !== emp.id));
+
+    setSnackbar({
+      open: true,
+      message: `${emp.name} removed.`,
+      severity: "success",
+    });
+  } catch (err: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed to delete: ${err.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const filtered = employees.filter(
     (emp) =>

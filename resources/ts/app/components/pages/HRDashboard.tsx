@@ -69,7 +69,7 @@ export default function HRDashboard() {
           HR / Admin Dashboard
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Welcome to Buenaventura Estate HRIS — live data from Supabase
+          Welcome to Buenaventura Estate HRIS
         </Typography>
       </Box>
 
