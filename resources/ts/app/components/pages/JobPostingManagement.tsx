@@ -154,37 +154,31 @@ export default function JobPostingManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm("Remove this job posting?")) return;
+  if (!window.confirm("Permanently delete this job posting? This cannot be undone.")) return;
 
-    try {
-      const { error } = await supabase
-        .from("job_postings")
-        .update({ is_active: false })
-        .eq("id", id);
+  try {
+    const { error } = await supabase
+      .from("job_postings")
+      .delete()
+      .eq("id", id);
 
-      if (error) throw error;
+    if (error) throw error;
 
-      setJobs(prev =>
-        prev.map(job =>
-          job.id === id ? { ...job, is_active: false } : job
-        )
-      );
+    setJobs(prev => prev.filter(job => job.id !== id));
 
-      setSnackbar({
-        open: true,
-        message: "Job posting removed!",
-        severity: "success",
-      });
-
-      fetchJobs();
-    } catch (e: any) {
-      setSnackbar({
-        open: true,
-        message: `Failed: ${e.message}`,
-        severity: "error",
-      });
-    }
-  };
+    setSnackbar({
+      open: true,
+      message: "Job posting deleted permanently!",
+      severity: "success",
+    });
+  } catch (e: any) {
+    setSnackbar({
+      open: true,
+      message: `Failed: ${e.message}`,
+      severity: "error",
+    });
+  }
+};
 
   const handleToggleActive = async (job: JobPosting) => {
     const newStatus = !job.is_active;
