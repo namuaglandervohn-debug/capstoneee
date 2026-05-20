@@ -242,7 +242,6 @@ export default function LandingPage() {
               startIcon={<Login />}
               onClick={() => navigate("/login")}
               sx={{
-                borderRadius: 999,
                 px: { xs: 1.8, sm: 3 },
                 fontWeight: 800,
                 textTransform: "none",
@@ -313,7 +312,7 @@ export default function LandingPage() {
                   onClick={() => navigate("/apply")}
                   fullWidth={isMobile}
                   sx={{
-                    borderRadius: 999,
+                    borderRadius: "18px",
                     px: 4,
                     py: 1.4,
                     fontWeight: 900,
@@ -337,7 +336,7 @@ export default function LandingPage() {
                   onClick={() => navigate("/track")}
                   fullWidth={isMobile}
                   sx={{
-                    borderRadius: 999,
+                    borderRadius: "18px",
                     px: 4,
                     py: 1.4,
                     fontWeight: 900,
@@ -428,7 +427,7 @@ export default function LandingPage() {
             onClick={() => document.getElementById("jobs")?.scrollIntoView({ behavior: "smooth" })}
             fullWidth={isMobile}
             sx={{
-              borderRadius: 999,
+              borderRadius: "18px",
               px: 4,
               py: 1.6,
               fontWeight: 900,
